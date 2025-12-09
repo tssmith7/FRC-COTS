@@ -1,0 +1,13 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"addin",
+	"author":	"Logan deLaar - Team 5000",
+	"description":	{
+		"":	""
+	},
+	"version":	"",
+	"runOnStartup":	false,
+	"supportedOS":	"Windows and Mac",
+	"editEnabled":	true,
+	"iconFilename":	"Screenshot 2025-12-09 at 8.25.19 AM.png"
+}

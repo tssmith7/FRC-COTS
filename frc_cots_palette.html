@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>FRC COTS Library</title>
+  <style>
+    :root {
+      /* Dark theme defaults */
+      --bg-window: #101217;
+      --bg-main: #181b22;
+      --bg-elevated: #202633;
+      --bg-elevated-soft: #1d222e;
+      --bg-item-hover: #283246;
+      --bg-item-selected: #32415b;
+      --fg-main: #f4f6ff;
+      --fg-muted: #a4a9c0;
+      --fg-subtle: #6f7486;
+      --accent: #3b82ff;
+      --accent-soft: #27334d;
+      --accent-strong: #2563eb;
+      --border-subtle: #292d3b;
+      --shadow-elevated: 0 8px 18px rgba(0, 0, 0, 0.55);
+      --input-bg: #151926;
+      --pill-bg: #1f2431;
+      --pill-knob: #f4f6ff;
+    }
+
+    :root[data-theme="light"] {
+      --bg-window: #e7e9f3;
+      --bg-main: #f7f7fb;
+      --bg-elevated: #ffffff;
+      --bg-elevated-soft: #f3f4fb;
+      --bg-item-hover: #e3ebff;
+      --bg-item-selected: #d2e1ff;
+      --fg-main: #12141f;
+      --fg-muted: #5c6075;
+      --fg-subtle: #8a8ea4;
+      --accent: #2563eb;
+      --accent-soft: #d3e2ff;
+      --accent-strong: #1d4ed8;
+      --border-subtle: #c5c9dd;
+      --shadow-elevated: 0 6px 14px rgba(15, 23, 42, 0.18);
+      --input-bg: #ffffff;
+      --pill-bg: #e2e6f5;
+      --pill-knob: #ffffff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 8px;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      background: var(--bg-window);
+      color: var(--fg-main);
+    }
+
+    #appCard {
+      background: var(--bg-main);
+      border-radius: 12px;
+      padding: 10px 12px 12px;
+      box-shadow: var(--shadow-elevated);
+      border: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      height: calc(100vh - 16px);
+      max-height: 560px;
+    }
+
+    #headerRow {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #titleBlock {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 16px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    #subtitle {
+      margin: 0;
+      font-size: 11px;
+      color: var(--fg-subtle);
+    }
+
+    /* Theme toggle pill */
+    #themeToggle {
+      position: relative;
+      border: none;
+      border-radius: 999px;
+      background: var(--pill-bg);
+      padding: 4px 9px 4px 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      font-size: 10px;
+      color: var(--fg-muted);
+      user-select: none;
+      min-width: 72px;
+    }
+
+    #themeToggleLabel {
+      white-space: nowrap;
+    }
+
+    #themeToggleKnob {
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      background: var(--pill-knob);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    }
+
+    #themeToggle[data-theme="light"] {
+      padding: 4px 4px 4px 9px;
+      flex-direction: row-reverse;
+    }
+
+    #searchRow {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      background: var(--bg-elevated-soft);
+      border-radius: 8px;
+      padding: 5px 7px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    #searchInput {
+      flex: 1;
+      padding: 4px 6px;
+      border-radius: 5px;
+      border: 1px solid transparent;
+      background: var(--input-bg);
+      color: var(--fg-main);
+      font-size: 12px;
+      outline: none;
+    }
+
+    #searchInput::placeholder {
+      color: var(--fg-subtle);
+    }
+
+    #searchInput:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5);
+    }
+
+    #favOnlyLabel {
+      font-size: 11px;
+      white-space: nowrap;
+      color: var(--fg-muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    #favOnly {
+      accent-color: var(--accent);
+    }
+
+    #partsShell {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      overflow: hidden;
+    }
+
+    #partsContainer {
+      border-radius: 8px;
+      flex: 1;
+      overflow-y: auto;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      padding: 2px 0;
+    }
+
+    .scrollbar {
+      scrollbar-width: thin;
+      scrollbar-color: var(--accent-soft) transparent;
+    }
+
+    .scrollbar::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .scrollbar::-webkit-scrollbar-thumb {
+      background-color: var(--accent-soft);
+      border-radius: 999px;
+    }
+
+    .partItem,
+    .folderItem {
+      display: flex;
+      align-items: center;
+      padding: 6px 9px;
+      cursor: pointer;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    .partItem:last-child,
+    .folderItem:last-child {
+      border-bottom: none;
+    }
+
+    .partItem:hover,
+    .folderItem:hover {
+      background-color: var(--bg-item-hover);
+    }
+
+    .partItem.selected {
+      background-color: var(--bg-item-selected);
+    }
+
+    .folderItem {
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--fg-main);
+    }
+
+    .folderIcon {
+      width: 22px;
+      height: 22px;
+      border-radius: 5px;
+      margin-right: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .fav {
+      font-size: 14px;
+      color: #7c7f8f;
+      margin-left: 6px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+
+    .fav.on {
+      color: #f3b300;
+      text-shadow: 0 0 4px rgba(251, 191, 36, 0.6);
+    }
+
+    .icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: #202638;
+      margin-right: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .textCol {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .nameLine {
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pathLine {
+      font-size: 10px;
+      color: var(--fg-subtle);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .breadcrumb {
+      font-size: 11px;
+      color: var(--fg-subtle);
+      margin: 4px 9px;
+    }
+
+    .breadcrumb span {
+      cursor: pointer;
+    }
+
+    .breadcrumb span:hover {
+      text-decoration: underline;
+      color: var(--accent);
+    }
+
+    #emptyMsg {
+      margin: 4px 2px 0;
+      font-size: 12px;
+      color: var(--fg-subtle);
+      display: none;
+    }
+
+    .emptyMessage {
+      font-size: 12px;
+      color: var(--fg-subtle);
+      padding: 8px 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="appCard">
+    <div id="headerRow">
+      <div id="titleBlock">
+        <h2>FRC COTS</h2>
+        <p id="subtitle">
+          Click a part to insert it at the selected faces, edges, or joint origins in your design.
+        </p>
+      </div>
+      <button id="themeToggle" type="button" data-theme="dark">
+        <div id="themeToggleKnob"></div>
+        <span id="themeToggleLabel">Dark</span>
+      </button>
+    </div>
+
+    <div id="searchRow">
+      <input
+        id="searchInput"
+        type="text"
+        placeholder="Search parts… (e.g. Kraken, 6804, spacer)"
+      />
+      <label id="favOnlyLabel">
+        <input type="checkbox" id="favOnly" />
+        ★ only
+      </label>
+    </div>
+
+    <div id="partsShell">
+      <div id="partsContainer" class="scrollbar"></div>
+      <div id="emptyMsg">
+        No parts found. Make sure there are .f3d files in the FRC_COTS project,
+        or adjust your search.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let allParts = [];      // full list from Fusion: {index, label, favorite, thumb?}
+    let filteredParts = []; // flat view when searching / favorites
+    let selectedIndex = null; // currently selected part index, or null
+
+    // Folder tree root node: { name, folders: Map(name -> node), parts: [partObj] }
+    let folderRoot = { name: "", folders: new Map(), parts: [] };
+    let currentPath = []; // array of folder names, from root to current node
+
+    const THEME_KEY = "frcCotsTheme";
+
+    function buildFolderTree() {
+      folderRoot = { name: "", folders: new Map(), parts: [] };
+
+      allParts.forEach((part) => {
+        const segments = part.label.split("/");
+        const fileName = segments.pop(); // name.f3d
+        let node = folderRoot;
+        segments.forEach((seg) => {
+          if (!node.folders.has(seg)) {
+            node.folders.set(seg, {
+              name: seg,
+              folders: new Map(),
+              parts: [],
+            });
+          }
+          node = node.folders.get(seg);
+        });
+        node.parts.push(part);
+      });
+
+      currentPath = [];
+    }
+
+    function getFolderNode(path) {
+      let node = folderRoot;
+      for (const seg of path) {
+        if (!node.folders.has(seg)) return folderRoot;
+        node = node.folders.get(seg);
+      }
+      return node;
+    }
+
+    function applyTheme(theme) {
+      const root = document.documentElement;
+      const toggle = document.getElementById("themeToggle");
+      const label = document.getElementById("themeToggleLabel");
+      if (!root || !toggle || !label) return;
+
+      if (theme !== "light" && theme !== "dark") {
+        theme = "dark";
+      }
+      root.setAttribute("data-theme", theme);
+      toggle.setAttribute("data-theme", theme);
+      label.textContent = theme === "dark" ? "Dark" : "Light";
+    }
+
+    function toggleTheme() {
+      const current = document.documentElement.getAttribute("data-theme") || "dark";
+      const next = current === "dark" ? "light" : "dark";
+      applyTheme(next);
+      try {
+        window.localStorage.setItem(THEME_KEY, next);
+      } catch (e) {
+        // localStorage might be unavailable; ignore
+      }
+    }
+
+    function applyFilter() {
+      const term = document.getElementById("searchInput").value.trim().toLowerCase();
+      const favOnly = document.getElementById("favOnly").checked;
+
+      if (term || favOnly) {
+        // Flat filtered view
+        filteredParts = allParts.filter((p) => {
+          if (term && !p.label.toLowerCase().includes(term)) return false;
+          if (favOnly && !p.favorite) return false;
+          return true;
+        });
+      } else {
+        // No search and not favorites-only: folder view, so filteredParts not used
+        filteredParts = [];
+      }
+
+      renderPartsList();
+    }
+
+    function renderPartsList() {
+      const container = document.getElementById("partsContainer");
+      const emptyMsg = document.getElementById("emptyMsg");
+      container.innerHTML = "";
+
+      const term = document.getElementById("searchInput").value.trim().toLowerCase();
+      const favOnly = document.getElementById("favOnly").checked;
+
+      // Flat view: searching or favorites only
+      if (term || favOnly) {
+        if (!filteredParts.length) {
+          emptyMsg.style.display = "block";
+          return;
+        }
+        emptyMsg.style.display = "none";
+
+        filteredParts.forEach((part) => {
+          const row = document.createElement("div");
+          row.className = "partItem";
+          if (part.index === selectedIndex) {
+            row.classList.add("selected");
+          }
+
+          const icon = document.createElement("div");
+          icon.className = "icon";
+          const img = document.createElement("img");
+          const baseName = part.label.split("/").slice(-1)[0];
+          const safeName = baseName.replace(/\.[^/.]+$/, "");
+
+          if (part.thumb) {
+            img.src = part.thumb;
+          } else {
+            img.src = "icons/" + safeName + ".png";
+          }
+
+          img.onerror = () => {
+            icon.textContent = "⚙";
+            img.remove();
+          };
+          icon.appendChild(img);
+
+          const textCol = document.createElement("div");
+          textCol.className = "textCol";
+
+          const nameDiv = document.createElement("div");
+          nameDiv.className = "nameLine";
+          nameDiv.textContent = baseName;
+
+          const pathDiv = document.createElement("div");
+          pathDiv.className = "pathLine";
+          const folderPath = part.label.includes("/")
+            ? part.label.split("/").slice(0, -1).join(" / ")
+            : "";
+          pathDiv.textContent = folderPath;
+
+          textCol.appendChild(nameDiv);
+          textCol.appendChild(pathDiv);
+
+          const fav = document.createElement("div");
+          fav.className = "fav" + (part.favorite ? " on" : "");
+          fav.textContent = "★";
+
+          fav.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            part.favorite = !part.favorite;
+            fav.classList.toggle("on", part.favorite);
+            try {
+              if (typeof adsk !== "undefined" && adsk.fusionSendData) {
+                const payload = JSON.stringify({
+                  index: part.index,
+                  favorite: part.favorite,
+                });
+                adsk.fusionSendData("toggleFavorite", payload);
+              }
+            } catch (e) {
+              console.error("toggleFavorite send error:", e);
+            }
+          });
+
+          row.addEventListener("click", () => {
+            selectedIndex = part.index;
+            sendInsertPart(part.index);
+            renderPartsList();
+          });
+
+          row.appendChild(icon);
+          row.appendChild(textCol);
+          row.appendChild(fav);
+          container.appendChild(row);
+        });
+
+        return;
+      }
+
+      // Folder view: no search and not favorites-only
+      emptyMsg.style.display = "none";
+
+      // Breadcrumb
+      const breadcrumb = document.createElement("div");
+      breadcrumb.className = "breadcrumb";
+
+      const rootSpan = document.createElement("span");
+      rootSpan.textContent = "FRC_COTS";
+      rootSpan.addEventListener("click", () => {
+        currentPath = [];
+        renderPartsList();
+      });
+      breadcrumb.appendChild(rootSpan);
+
+      currentPath.forEach((seg, idx) => {
+        const sep = document.createTextNode(" / ");
+        breadcrumb.appendChild(sep);
+        const span = document.createElement("span");
+        span.textContent = seg;
+        span.addEventListener("click", () => {
+          currentPath = currentPath.slice(0, idx + 1);
+          renderPartsList();
+        });
+        breadcrumb.appendChild(span);
+      });
+
+      container.appendChild(breadcrumb);
+
+      const node = getFolderNode(currentPath);
+
+      // Up row if not at root
+      if (currentPath.length) {
+        const upRow = document.createElement("div");
+        upRow.className = "folderItem";
+        const upIcon = document.createElement("div");
+        upIcon.className = "folderIcon";
+        upIcon.textContent = "⮭";
+        const upLabel = document.createElement("div");
+        upLabel.textContent = "..";
+        upRow.appendChild(upIcon);
+        upRow.appendChild(upLabel);
+        upRow.addEventListener("click", () => {
+          currentPath = currentPath.slice(0, -1);
+          renderPartsList();
+        });
+        container.appendChild(upRow);
+      }
+
+      // Child folders
+      const folderNames = Array.from(node.folders.keys()).sort((a, b) =>
+        a.toLowerCase().localeCompare(b.toLowerCase())
+      );
+      folderNames.forEach((fname) => {
+        const fRow = document.createElement("div");
+        fRow.className = "folderItem";
+
+        const fIcon = document.createElement("div");
+        fIcon.className = "folderIcon";
+        fIcon.textContent = "📁";
+
+        const fLabel = document.createElement("div");
+        fLabel.textContent = fname;
+
+        fRow.appendChild(fIcon);
+        fRow.appendChild(fLabel);
+
+        fRow.addEventListener("click", () => {
+          currentPath = currentPath.concat(fname);
+          renderPartsList();
+        });
+
+        container.appendChild(fRow);
+      });
+
+      // Parts directly in this folder
+      node.parts.forEach((part) => {
+        const row = document.createElement("div");
+        row.className = "partItem";
+        if (part.index === selectedIndex) {
+          row.classList.add("selected");
+        }
+
+        const icon = document.createElement("div");
+        icon.className = "icon";
+        const img = document.createElement("img");
+        const baseName = part.label.split("/").slice(-1)[0];
+        const safeName = baseName.replace(/\.[^/.]+$/, "");
+
+        if (part.thumb) {
+          img.src = part.thumb;
+        } else {
+          img.src = "icons/" + safeName + ".png";
+        }
+
+        img.onerror = () => {
+          icon.textContent = "⚙";
+          img.remove();
+        };
+        icon.appendChild(img);
+
+        const textCol = document.createElement("div");
+        textCol.className = "textCol";
+
+        const nameDiv = document.createElement("div");
+        nameDiv.className = "nameLine";
+        nameDiv.textContent = baseName;
+
+        textCol.appendChild(nameDiv);
+
+        const fav = document.createElement("div");
+        fav.className = "fav" + (part.favorite ? " on" : "");
+        fav.textContent = "★";
+
+        fav.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          part.favorite = !part.favorite;
+          fav.classList.toggle("on", part.favorite);
+          try {
+            if (typeof adsk !== "undefined" && adsk.fusionSendData) {
+              const payload = JSON.stringify({
+                index: part.index,
+                favorite: part.favorite,
+              });
+              adsk.fusionSendData("toggleFavorite", payload);
+            }
+          } catch (e) {
+            console.error("toggleFavorite send error:", e);
+          }
+        });
+
+        row.addEventListener("click", () => {
+          selectedIndex = part.index;
+          sendInsertPart(part.index);
+          renderPartsList();
+        });
+
+        row.appendChild(icon);
+        row.appendChild(textCol);
+        row.appendChild(fav);
+        container.appendChild(row);
+      });
+
+      if (!folderNames.length && !node.parts.length) {
+        const msg = document.createElement("div");
+        msg.className = "emptyMessage";
+        msg.textContent = "This folder is empty.";
+        container.appendChild(msg);
+      }
+    }
+
+    // Fusion calls this via palette.sendInfoToHTML("partsList", json)
+    window.fusionJavaScriptHandler = {
+      handle: function (action, data) {
+        try {
+          if (action === "partsList") {
+            const parts = JSON.parse(data || "[]");
+            if (Array.isArray(parts)) {
+              allParts = parts.map((p) => ({
+                index: p.index,
+                label: p.label,
+                favorite: !!p.favorite,
+                thumb: p.thumb || null,
+              }));
+            } else {
+              allParts = [];
+            }
+            selectedIndex = null;
+            buildFolderTree();
+            applyFilter();
+          } else if (action === "debugger") {
+            debugger;
+          } else {
+            return "Unexpected action: " + action;
+          }
+        } catch (e) {
+          console.error("fusionJavaScriptHandler error:", e);
+          return "FAILED";
+        }
+        return "OK";
+      },
+    };
+
+    document.addEventListener("DOMContentLoaded", () => {
+      const search = document.getElementById("searchInput");
+      search.addEventListener("input", applyFilter);
+      const favOnly = document.getElementById("favOnly");
+      favOnly.addEventListener("change", applyFilter);
+
+      const toggle = document.getElementById("themeToggle");
+      toggle.addEventListener("click", toggleTheme);
+
+      // Initialize theme from localStorage or default to dark
+      let initialTheme = "dark";
+      try {
+        const stored = window.localStorage.getItem(THEME_KEY);
+        if (stored === "light" || stored === "dark") {
+          initialTheme = stored;
+        }
+      } catch (e) {
+        // ignore
+      }
+      applyTheme(initialTheme);
+
+      requestPartsFromFusion();
+    });
+
+    function requestPartsFromFusion() {
+      try {
+        if (typeof adsk !== "undefined" && adsk.fusionSendData) {
+          adsk.fusionSendData("requestParts", "");
+        }
+      } catch (e) {
+        console.error("requestParts error:", e);
+      }
+    }
+
+    function sendInsertPart(index) {
+      try {
+        if (typeof adsk !== "undefined" && adsk.fusionSendData) {
+          const payload = JSON.stringify({ index: index });
+          adsk.fusionSendData("insertPart", payload);
+        }
+      } catch (e) {
+        console.error("insertPart send error:", e);
+      }
+    }
+  </script>
+</body>
+</html>
