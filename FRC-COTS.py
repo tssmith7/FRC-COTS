@@ -12,7 +12,7 @@ from .lib import fusionAddInUtils as futil
 handlers = []
 
 # Global state
-g_cots_files = []      # list of (label, DataFile, thumbidx)
+g_cots_files = []      # list of (path, partname, DataFile, thumbidx)
 g_favorites = {}       # dataFile.id -> bool
 g_palette = None       # HTML palette reference
 g_thumbnails = []
@@ -74,8 +74,8 @@ def _walk_folder(progress: adsk.core.ProgressDialog, folder, prefix, out_list):
         try:
             adsk.doEvents()
             if df.fileExtension and df.fileExtension.lower() == 'f3d':
-                label = prefix + df.name
-                out_list.append((label, df, len(out_list)+1))
+                label = df.name
+                out_list.append((prefix, label, df, len(out_list)+1))
                 futil.log(f'Loading file {label} at idx {len(out_list)}...')
                 idx = idx + 1
                 progress.progressValue = idx
@@ -122,14 +122,14 @@ def load_cots_files(app):
         futil.log( f'Loaded {len(g_cots_files)} COTS files...')
 
         # Sort nicely by label
-        g_cots_files.sort(key=lambda t: t[0].lower())
+        g_cots_files.sort(key=lambda t: (t[0] + t[1]).lower())
     except:
         futil.handle_error( "Load COTS files" )
         g_cots_files = []
     progress.hide()
 
     futil.log( "   Requesting thumbnails...")
-    for (label, df, idx) in g_cots_files:
+    for (_, _, df, idx) in g_cots_files:
         g_thumbnails.append( (idx, df.thumbnail) )
 
 
@@ -251,9 +251,10 @@ def load_palette(ui):
                 pass
 
             parts = []
-            for idx, (label, df, thumbidx) in enumerate(g_cots_files):
+            for idx, (path, label, df, thumbidx) in enumerate(g_cots_files):
                 parts.append({
                     'index': idx,
+                    'path': path,
                     'label': label,
                     'favorite': g_favorites.get(df.id, False),
                     'thumb': get_icon_filename(thumbidx)
@@ -377,7 +378,9 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     ui.messageBox('Invalid part index from HTML.')
                     return
 
-                label, data_file, _ = g_cots_files[idx]
+                path, label, data_file, _ = g_cots_files[idx]
+
+                project = os.path.join( path, label )
 
                 # Get current canvas selections as targets
                 sels = ui.activeSelections
@@ -395,7 +398,7 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     ui.messageBox('No active Fusion design.')
                     return
 
-                insert_part_at_targets(design, label, data_file, targets, ui)
+                insert_part_at_targets(design, project, data_file, targets, ui)
                 return
 
             # HTML toggles favorite state for a part
@@ -409,7 +412,7 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     fav = False
 
                 if 0 <= idx < len(g_cots_files):
-                    _label, df, _thumbidx = g_cots_files[idx]
+                    _, _label, df, _thumbidx = g_cots_files[idx]
                     g_favorites[df.id] = fav
                     save_favorites()
                 return
