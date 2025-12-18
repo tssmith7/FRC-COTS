@@ -4,6 +4,9 @@ import traceback
 import json
 import os
 import threading
+from .folder_walker import FolderWalkingThread
+from .folder_walker import get_cots_files
+from .folder_walker import myCustomEvent
 
 from .lib import fusionAddInUtils as futil
 
@@ -11,11 +14,15 @@ from .lib import fusionAddInUtils as futil
 # Keep a global reference to event handlers so they are not garbage collected.
 handlers = []
 
+# Custom event to signal the folder walker thread has finished and the
+# palette needs to be updated and enabled
+customEvent = None
+
 # Global state
-g_cots_files = []      # list of (path, partname, DataFile, thumbidx)
 g_favorites = {}       # dataFile.id -> bool
 g_palette = None       # HTML palette reference
-g_thumbnails = []
+g_walker_thread_running = False
+
 app = adsk.core.Application.get()
 ui = app.userInterface
 
@@ -30,11 +37,6 @@ def _favorites_path():
     """Path to the favorites JSON file next to this add-in."""
     folder = os.path.dirname(__file__)
     return os.path.join(folder, 'FRC_COTS_favorites.json')
-
-def get_icon_filename( thumbidx: int ):
-    """Path to the favorites JSON file next to this add-in."""
-    folder = os.path.dirname(__file__)
-    return os.path.join(folder, 'icons', f'icon_{thumbidx}.png')
 
 def load_favorites():
     """Load favorites mapping from disk."""
@@ -62,78 +64,7 @@ def save_favorites():
     except Exception:
         pass
 
-def _walk_folder(progress: adsk.core.ProgressDialog, folder, prefix, out_list):
-    """Recursively walk a DataFolder and append (label, DataFile) for .f3d files."""
-    # Files
-    progress.message = f'Loading folder {prefix}, file %v ...'
-    idx = 0
-    for df in folder.dataFiles:
-        if progress.wasCancelled:
-            return
-        
-        try:
-            adsk.doEvents()
-            if df.fileExtension and df.fileExtension.lower() == 'f3d':
-                label = df.name
-                out_list.append((prefix, label, df, len(out_list)+1))
-                futil.log(f'Loading file {label} at idx {len(out_list)}...')
-                idx = idx + 1
-                progress.progressValue = idx
-        except:
-            futil.log(f'Failed to load file {df.name}.')
-            continue
-    
-    futil.log( f'Folder {folder.name}, loaded {idx} files...')
-
-    # Subfolders
-    for sub in folder.dataFolders:
-        new_prefix = prefix + sub.name + '/'
-        _walk_folder(progress, sub, new_prefix, out_list)
-
-
-def load_cots_files(app):
-    """Populate g_cots_files with all .f3d files under the FRC_COTS project."""
-    global g_cots_files
-    global g_thumbnails
-
-    g_cots_files = []
-
-    futil.log(f'Loading COTS files....')
-
-    progress = ui.createProgressDialog()
-    try:
-        data = app.data
-        projects = data.dataProjects
-
-        frc_project = None
-        for proj in projects:
-            if proj.name == 'FRC_COTS':
-                frc_project = proj
-                break
-
-        if not frc_project:
-            futil.popup_error( "Could not find project FRC_COTS.")
-            return
-
-        root = frc_project.rootFolder
-
-        progress.show( "Loading COTS files from FRC_COTS Project...", "", 0, 20 )
-        _walk_folder(progress, root, '', g_cots_files)
-        futil.log( f'Loaded {len(g_cots_files)} COTS files...')
-
-        # Sort nicely by label
-        g_cots_files.sort(key=lambda t: (t[0] + t[1]).lower())
-    except:
-        futil.handle_error( "Load COTS files" )
-        g_cots_files = []
-    progress.hide()
-
-    futil.log( "   Requesting thumbnails...")
-    for (_, _, df, idx) in g_cots_files:
-        g_thumbnails.append( (idx, df.thumbnail) )
-
-
-def insert_part_at_targets(design, label, data_file, targets, ui):
+def insert_part_at_targets(design: adsk.fusion.Design, label, data_file, targets, ui):
     """
     Insert the given DataFile into the root component and create joints
     from its origin to each of the target entities.
@@ -153,7 +84,7 @@ def insert_part_at_targets(design, label, data_file, targets, ui):
 
         # Ensure the inserted occurrence is not grounded so joints can move it
         try:
-            new_occ.isGrounded = False
+            new_occ.isGroundToParent = False
         except:
             # If this property is not available for any reason, ignore and continue
             pass
@@ -234,15 +165,13 @@ def _palette_html_path():
     """Path to the HTML palette file."""
     return os.path.join(os.path.dirname(__file__), 'frc_cots_palette.html')
 
-def load_palette(ui):
+def load_palette():
     """Load the HTML palette used to browse COTS parts."""
-    global g_cots_files
+    global g_walker_thread_running
 
     futil.log(f'load_palette()....')
 
     try:
-        # Refresh COTS list in case the project changed
-        # load_cots_files(app)
         palette = get_or_create_palette(ui)
         if palette:
             try:
@@ -252,15 +181,17 @@ def load_palette(ui):
                 pass
 
             parts = []
-            for idx, (path, label, df, thumbidx) in enumerate(g_cots_files):
+            cots_files = get_cots_files()
+            for idx, (path, label, df, icon_name) in enumerate(cots_files):
                 parts.append({
                     'index': idx,
                     'path': path,
                     'label': label,
                     'favorite': g_favorites.get(df.id, False),
-                    'thumb': get_icon_filename(thumbidx)
+                    'thumb': icon_name,
+                    'loading': g_walker_thread_running
                 })
-            futil.log(f'   Sending {len(g_cots_files)} records to palette...')
+            futil.log(f'   Sending {len(parts)} records to palette...')
             palette.sendInfoToHTML('partsList', json.dumps(parts))
     except:
         futil.handle_error('load_palette failed:')
@@ -304,62 +235,28 @@ def get_or_create_palette(ui: adsk.core.UserInterface) -> adsk.core.Palette:
     g_palette = pal
     return pal
 
-class ThumbnailThread(threading.Thread):
-    def __init__(self, event):
-        threading.Thread.__init__(self)
-        self.stopped = event
-
-    def run(self):
-        global g_thumbnails
-
-        futil.log(f'ThumbnailThread::run()...')
-
-        # Process all the thumbnail images....
-        doneLoading = False
-
-        while not doneLoading:
-            doneLoading = True
-            idx = 0
-            while idx < len(g_thumbnails):
-                # futil.log(f'Processing thumbnail {idx}...')
-                (index, future) = g_thumbnails[idx]
-                future : adsk.core.DataObjectFuture = future
-                if future.state == adsk.core.FutureStates.ProcessingFutureState:
-                    doneLoading = False
-                try:
-                    if future.dataObject != None:
-                        filename = get_icon_filename(index)
-                        # futil.log(f'Creating thumbnail for {filename}')
-                        try:
-                            os.remove( filename )
-                        except:
-                            pass
-                        future.dataObject.saveToFile( filename )
-                except:
-                    futil.handle_error(f'   Error processing thumbnail {index}...')
-
-                idx = idx + 1
-
-        futil.log(f'ThumbnailThread finished...')
-
-
+class FolderWalkerThreadDoneEventHandler(adsk.core.CustomEventHandler):
+    def __init__(self):
+        super().__init__()
+    def notify(self, args):
+        global g_walker_thread_running
+        g_walker_thread_running = False
+        load_palette()
 
 class FRCHTMLHandler(adsk.core.HTMLEventHandler):
     """Handles messages coming from the HTML palette."""
 
     def notify(self, args):
-        global g_cots_files
 
         futil.log(f'FRCHTMLHandler::notify()...')
 
-        app, ui = get_app_ui()
         try:
             action = args.action
             data = args.data or ''
 
             # HTML asks for the list of parts
             if action == 'requestParts':
-                load_palette(ui)
+                load_palette()
                 return
 
             # HTML tells us to insert the selected part at current canvas selection
@@ -370,12 +267,12 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                 except Exception:
                     idx = -1
 
-                if idx < 0 or idx >= len(g_cots_files):
+                cots_files = get_cots_files()
+                if idx < 0 or idx >= len(cots_files):
                     ui.messageBox('Invalid part index from HTML.')
                     return
 
-                path, label, data_file, _ = g_cots_files[idx]
-
+                path, label, data_file, _ = cots_files[idx]
                 project = os.path.join( path, label )
 
                 # Get current canvas selections as targets
@@ -407,8 +304,9 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     idx = -1
                     fav = False
 
-                if 0 <= idx < len(g_cots_files):
-                    _, _label, df, _thumbidx = g_cots_files[idx]
+                cots_files = get_cots_files()
+                if 0 <= idx < len(cots_files):
+                    _, _label, df, _thumbidx = cots_files[idx]
                     g_favorites[df.id] = fav
                     save_favorites()
                 return
@@ -418,7 +316,7 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
 
 
 def run(context):
-    app, ui = get_app_ui()
+    global g_walker_thread_running
     try:
 
         cmd_id = 'FRC_InsertCOTS'
@@ -430,6 +328,12 @@ def run(context):
                 'Open the FRC COTS library palette to insert components'
             )
 
+        global customEvent
+        customEvent = app.registerCustomEvent(myCustomEvent)
+        onThreadEvent = FolderWalkerThreadDoneEventHandler()
+        customEvent.add(onThreadEvent)
+        handlers.append(onThreadEvent)
+
         class ShowPaletteCreatedHandler(adsk.core.CommandCreatedEventHandler):
             def __init__(self):
                 super().__init__()
@@ -438,7 +342,7 @@ def run(context):
 
                 futil.log(f'ShowPaletteCreatedHandler::notify()...')
 
-                load_palette(ui)
+                load_palette()
 
         on_created = ShowPaletteCreatedHandler()
         cmd_def.commandCreated.add(on_created)
@@ -455,13 +359,14 @@ def run(context):
 
         # Load favorites and COTS list once when the add-in starts
         load_favorites()
-        load_cots_files(app)
+        # load_cots_files(app)
 
         stopFlag = threading.Event()
-        thumbThread = ThumbnailThread(stopFlag)
-        thumbThread.start()
+        folderWalker = FolderWalkingThread(stopFlag)
+        folderWalker.start()
+        g_walker_thread_running = True
 
-        load_palette(ui)
+        load_palette()
 
     except:
         ui.messageBox('Add-in run failed:\n{}'.format(traceback.format_exc()))
