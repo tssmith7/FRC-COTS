@@ -276,7 +276,7 @@ class DatabaseThreadEventHandler(adsk.core.CustomEventHandler):
             load_palette()
 
         else:
-            futil.log( f'DatabaseThreadEventHandler() -- Unhandled event "{args.additionalInfo}"')
+            futil.log( f'    ---------- Unhandled event "{args.additionalInfo}"  ---------')
 
 class FRCHTMLHandler(adsk.core.HTMLEventHandler):
     """Handles messages coming from the HTML palette."""
@@ -312,7 +312,6 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     return
 
                 path, label, data_file_id, _ = cots_files[idx]
-                project = os.path.join( path, label )
 
                 # Get current canvas selections as targets
                 sels = ui.activeSelections
@@ -330,12 +329,14 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     ui.messageBox('No active Fusion design.')
                     return
 
-                insert_part_at_targets(design, project, path, data_file_id, targets, ui)
+                insert_part_at_targets(design, path, label, data_file_id, targets, ui)
                 return
 
             # User navigated to a new folder
             elif action == 'folderRequest':
                 folder = '/' + data
+                if len(data) > 1:
+                    folder = folder + '/'
                 futil.log( f'FRCHTMLHandler() -- Folder request for "{folder}"')
                 database_thread.load_folder( folder )
                 load_palette()
@@ -356,8 +357,10 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     g_favorites[dfid] = fav
                     save_favorites()
                 return
+            elif action == "response":
+                pass
             else:
-                futil.log( f'FRCHTMLHandler() -- Unhandled event "{action}"')
+                futil.log( f'    --------- Unhandled event "{action}" ----------')
 
         except:
             ui.messageBox('HTML palette error:\n{}'.format(traceback.format_exc()))
