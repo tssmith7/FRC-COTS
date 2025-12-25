@@ -3,10 +3,8 @@ import adsk.fusion
 import traceback
 import json
 import os
-import threading
-from .folder_walker import FolderWalkingThread
-from .folder_walker import get_cots_files
-from .folder_walker import myCustomEvent
+from . import config
+from . import database_thread
 
 from .lib import fusionAddInUtils as futil
 
@@ -19,23 +17,39 @@ handlers = []
 customEvent = None
 
 # Global state
-g_favorites = {}       # dataFile.id -> bool
-g_palette = None       # HTML palette reference
-g_walker_thread_running = False
+g_favorites = {}            # dataFile.id -> bool
+g_palette = None            # HTML palette reference
+g_dbThread = None
 
 app = adsk.core.Application.get()
 ui = app.userInterface
 
+def _ensure_file_paths_exist():
+    if not os.path.exists(config.PARTS_DB_FOLDER):
+        futil.popup_error(f'PARTS_DB_FOLDER = "{config.PARTS_DB_FOLDER}" does not exist!  '
+                          + 'See config.py file')
+        return False
+    
+    if not os.path.exists(config.PARTS_DB_PATH):
+        try:
+            os.mkdir(config.PARTS_DB_PATH)
+        except:
+            futil.popup_error(f'Cannot create PARTS_DB_PATH = "{config.PARTS_DB_PATH}".')
+            return False
 
-def get_app_ui():
-    app = adsk.core.Application.get()
-    ui = app.userInterface if app else None
-    return app, ui
+    icon_path = os.path.join(config.PARTS_DB_PATH, 'icons')
+    if not os.path.exists(icon_path):
+        try:
+            os.mkdir(icon_path)
+        except:
+            futil.popup_error(f'Cannot create icons directory at "{icon_path}".')
+            return False
 
+    return True
 
 def _favorites_path():
     """Path to the favorites JSON file next to this add-in."""
-    folder = os.path.dirname(__file__)
+    folder = config.PARTS_DB_PATH
     return os.path.join(folder, 'FRC_COTS_favorites.json')
 
 def load_favorites():
@@ -64,7 +78,7 @@ def save_favorites():
     except Exception:
         pass
 
-def insert_part_at_targets(design: adsk.fusion.Design, label, data_file, targets, ui):
+def insert_part_at_targets(design: adsk.fusion.Design, path, label, data_file_id, targets, ui):
     """
     Insert the given DataFile into the root component and create joints
     from its origin to each of the target entities.
@@ -72,6 +86,10 @@ def insert_part_at_targets(design: adsk.fusion.Design, label, data_file, targets
     root_comp = design.rootComponent
     occs = root_comp.occurrences
     joints = root_comp.joints
+
+    data_file = database_thread.get_data_file( path, data_file_id )
+    if not data_file:
+        return
 
     for target_entity in targets:
         # Insert as reference occurrence at identity transform
@@ -167,32 +185,32 @@ def _palette_html_path():
 
 def load_palette():
     """Load the HTML palette used to browse COTS parts."""
-    global g_walker_thread_running
 
     futil.log(f'load_palette()....')
 
     try:
         palette = get_or_create_palette(ui)
-        if palette:
-            try:
-                palette.isVisible = True
-            except:
-                # If Fusion is unhappy about toggling visibility, just ignore it.
-                pass
+        if not palette:
+            return
+        
+        try:
+            palette.isVisible = True
+        except:
+            # If Fusion is unhappy about toggling visibility, just ignore it.
+            pass
 
-            parts = []
-            cots_files = get_cots_files()
-            for idx, (path, label, df, icon_name) in enumerate(cots_files):
-                parts.append({
-                    'index': idx,
-                    'path': path,
-                    'label': label,
-                    'favorite': g_favorites.get(df.id, False),
-                    'thumb': icon_name,
-                    'loading': g_walker_thread_running
-                })
-            futil.log(f'   Sending {len(parts)} records to palette...')
-            palette.sendInfoToHTML('partsList', json.dumps(parts))
+        parts = []
+        cots_files = database_thread.get_sorted_database_list()
+        for idx, (path, label, dfid, icon_name) in enumerate(cots_files):
+            parts.append({
+                'index': idx,
+                'path': path,
+                'label': label,
+                'favorite': g_favorites.get(dfid, False),
+                'thumb': icon_name
+            })
+        futil.log(f'   Sending {len(parts)} records to palette...')
+        palette.sendInfoToHTML('partsList', json.dumps(parts))
     except:
         futil.handle_error('load_palette failed:')
 
@@ -235,44 +253,65 @@ def get_or_create_palette(ui: adsk.core.UserInterface) -> adsk.core.Palette:
     g_palette = pal
     return pal
 
-class FolderWalkerThreadDoneEventHandler(adsk.core.CustomEventHandler):
+class DatabaseThreadEventHandler(adsk.core.CustomEventHandler):
     def __init__(self):
         super().__init__()
-    def notify(self, args):
-        global g_walker_thread_running
-        g_walker_thread_running = False
-        load_palette()
+    def notify(self, args: adsk.core.CustomEventArgs):
+
+        futil.log( f'DatabaseThreadEventHandler() -- Event "{args.additionalInfo}"')
+
+        if args.additionalInfo == "busy":
+            palette = get_or_create_palette(ui)
+            if not palette:
+                return
+            palette.sendInfoToHTML( 'busy', '')
+
+        elif args.additionalInfo == "activate":
+            palette = get_or_create_palette(ui)
+            if not palette:
+                return
+            palette.sendInfoToHTML( 'activate', '')
+
+        elif args.additionalInfo == "update":
+            load_palette()
+
+        else:
+            futil.log( f'DatabaseThreadEventHandler() -- Unhandled event "{args.additionalInfo}"')
 
 class FRCHTMLHandler(adsk.core.HTMLEventHandler):
     """Handles messages coming from the HTML palette."""
 
     def notify(self, args):
-
-        futil.log(f'FRCHTMLHandler::notify()...')
-
         try:
             action = args.action
             data = args.data or ''
+
+            futil.log( f'FRCHTMLHandler() -- Event "{action}"')
 
             # HTML asks for the list of parts
             if action == 'requestParts':
                 load_palette()
                 return
 
+            # HTML palette is active and ready to receive data
+            elif action == 'ready':
+                database_thread.g_palette_ready = True
+                futil.log(f'   FRCHTMLHandler() -- g_palette_ready = {database_thread.g_palette_ready}')
+
             # HTML tells us to insert the selected part at current canvas selection
-            if action == 'insertPart':
+            elif action == 'insertPart':
                 try:
                     payload = json.loads(data) if data else {}
                     idx = int(payload.get('index', -1))
                 except Exception:
                     idx = -1
 
-                cots_files = get_cots_files()
+                cots_files = database_thread.get_sorted_database_list()
                 if idx < 0 or idx >= len(cots_files):
                     ui.messageBox('Invalid part index from HTML.')
                     return
 
-                path, label, data_file, _ = cots_files[idx]
+                path, label, data_file_id, _ = cots_files[idx]
                 project = os.path.join( path, label )
 
                 # Get current canvas selections as targets
@@ -291,11 +330,18 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     ui.messageBox('No active Fusion design.')
                     return
 
-                insert_part_at_targets(design, project, data_file, targets, ui)
+                insert_part_at_targets(design, project, path, data_file_id, targets, ui)
                 return
 
+            # User navigated to a new folder
+            elif action == 'folderRequest':
+                folder = '/' + data
+                futil.log( f'FRCHTMLHandler() -- Folder request for "{folder}"')
+                database_thread.load_folder( folder )
+                load_palette()
+                
             # HTML toggles favorite state for a part
-            if action == 'toggleFavorite':
+            elif action == 'toggleFavorite':
                 try:
                     payload = json.loads(data) if data else {}
                     idx = int(payload.get('index', -1))
@@ -304,20 +350,25 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     idx = -1
                     fav = False
 
-                cots_files = get_cots_files()
+                cots_files = database_thread.get_sorted_database_list()
                 if 0 <= idx < len(cots_files):
-                    _, _label, df, _thumbidx = cots_files[idx]
-                    g_favorites[df.id] = fav
+                    _, _label, dfid, _thumbidx = cots_files[idx]
+                    g_favorites[dfid] = fav
                     save_favorites()
                 return
+            else:
+                futil.log( f'FRCHTMLHandler() -- Unhandled event "{action}"')
 
         except:
             ui.messageBox('HTML palette error:\n{}'.format(traceback.format_exc()))
 
 
 def run(context):
-    global g_walker_thread_running
+    global g_dbThread
     try:
+
+        if not _ensure_file_paths_exist():
+            raise Exception("Database directory creation failed.") 
 
         cmd_id = 'FRC_InsertCOTS'
         cmd_def = ui.commandDefinitions.itemById(cmd_id)
@@ -329,8 +380,8 @@ def run(context):
             )
 
         global customEvent
-        customEvent = app.registerCustomEvent(myCustomEvent)
-        onThreadEvent = FolderWalkerThreadDoneEventHandler()
+        customEvent = app.registerCustomEvent(database_thread.myCustomEvent)
+        onThreadEvent = DatabaseThreadEventHandler()
         customEvent.add(onThreadEvent)
         handlers.append(onThreadEvent)
 
@@ -361,10 +412,8 @@ def run(context):
         load_favorites()
         # load_cots_files(app)
 
-        stopFlag = threading.Event()
-        folderWalker = FolderWalkingThread(stopFlag)
-        folderWalker.start()
-        g_walker_thread_running = True
+        g_dbThread = database_thread.DatabaseThread()
+        g_dbThread.start()
 
         load_palette()
 
@@ -373,9 +422,15 @@ def run(context):
 
 
 def stop(context):
-    app, ui = get_app_ui()
+    global g_dbThread
+
     try:
         cmd_id = 'FRC_InsertCOTS'
+
+        # Stop the database thread
+        if g_dbThread:
+            g_dbThread.stop()
+            g_dbThread.join()
 
         # Remove the toolbar button
         solid_ws = ui.workspaces.itemById('FusionSolidEnvironment')

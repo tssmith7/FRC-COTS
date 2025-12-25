@@ -424,7 +424,8 @@
 
       allParts.forEach((part) => {
         segments = part.path.split("/");
-        segments.pop()
+//         segments.pop()
+        segments = segments.slice(1,-1)
         const fileName = part.label; // name.f3d
         let node = folderRoot;
         segments.forEach((seg) => {
@@ -497,10 +498,7 @@
     }
 
     function renderPartsList() {
-      const isLoading = allParts[0].loading;
-
       const container = document.getElementById("partsContainer");
-      // container.disabled = allParts[0].loading;
 
       const emptyMsg = document.getElementById("emptyMsg");
       container.innerHTML = "";
@@ -566,30 +564,28 @@
           fav.className = "fav" + (part.favorite ? " on" : "");
           fav.textContent = "★";
 
-          if( !isLoading ) {
-            fav.addEventListener("click", (ev) => {
-              ev.stopPropagation();
-              part.favorite = !part.favorite;
-              fav.classList.toggle("on", part.favorite);
-              try {
-                if (typeof adsk !== "undefined" && adsk.fusionSendData) {
-                  const payload = JSON.stringify({
-                    index: part.index,
-                    favorite: part.favorite,
-                  });
-                  adsk.fusionSendData("toggleFavorite", payload);
-                }
-              } catch (e) {
-                console.error("toggleFavorite send error:", e);
+          fav.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            part.favorite = !part.favorite;
+            fav.classList.toggle("on", part.favorite);
+            try {
+              if (typeof adsk !== "undefined" && adsk.fusionSendData) {
+                const payload = JSON.stringify({
+                  index: part.index,
+                  favorite: part.favorite,
+                });
+                adsk.fusionSendData("toggleFavorite", payload);
               }
-            });
-          
-            row.addEventListener("click", () => {
-              selectedIndex = part.index;
-              sendInsertPart(part.index);
-              renderPartsList();
-            });
-          }
+            } catch (e) {
+              console.error("toggleFavorite send error:", e);
+            }
+          });
+        
+          row.addEventListener("click", () => {
+            selectedIndex = part.index;
+            sendInsertPart(part.index);
+            renderPartsList();
+          });
 
           row.appendChild(icon);
           row.appendChild(textCol);
@@ -611,6 +607,7 @@
       rootSpan.textContent = "FRC_COTS";
       rootSpan.addEventListener("click", () => {
         currentPath = [];
+        folderSelectionChanged( currentPath );
         renderPartsList();
       });
       breadcrumb.appendChild(rootSpan);
@@ -620,12 +617,11 @@
         breadcrumb.appendChild(sep);
         const span = document.createElement("span");
         span.textContent = seg;
-        if( !isLoading ) {
-          span.addEventListener("click", () => {
-            currentPath = currentPath.slice(0, idx + 1);
-            renderPartsList();
-          });
-        }
+        span.addEventListener("click", () => {
+          currentPath = currentPath.slice(0, idx + 1);
+          folderSelectionChanged( currentPath );
+          renderPartsList();
+        });
         breadcrumb.appendChild(span);
       });
 
@@ -646,6 +642,7 @@
         upRow.appendChild(upLabel);
         upRow.addEventListener("click", () => {
           currentPath = currentPath.slice(0, -1);
+          folderSelectionChanged( currentPath );
           renderPartsList();
         });
         container.appendChild(upRow);
@@ -669,12 +666,11 @@
         fRow.appendChild(fIcon);
         fRow.appendChild(fLabel);
 
-        if( !isLoading ) {
-          fRow.addEventListener("click", () => {
-            currentPath = currentPath.concat(fname);
-            renderPartsList();
-          });
-        }
+        fRow.addEventListener("click", () => {
+          currentPath = currentPath.concat(fname);
+          folderSelectionChanged( currentPath );
+          renderPartsList();
+        });
 
         container.appendChild(fRow);
       });
@@ -719,30 +715,28 @@
         fav.className = "fav" + (part.favorite ? " on" : "");
         fav.textContent = "★";
 
-        if( !isLoading ) {
-          fav.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            part.favorite = !part.favorite;
-            fav.classList.toggle("on", part.favorite);
-            try {
-              if (typeof adsk !== "undefined" && adsk.fusionSendData) {
-                const payload = JSON.stringify({
-                  index: part.index,
-                  favorite: part.favorite,
-                });
-                adsk.fusionSendData("toggleFavorite", payload);
-              }
-            } catch (e) {
-              console.error("toggleFavorite send error:", e);
+        fav.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          part.favorite = !part.favorite;
+          fav.classList.toggle("on", part.favorite);
+          try {
+            if (typeof adsk !== "undefined" && adsk.fusionSendData) {
+              const payload = JSON.stringify({
+                index: part.index,
+                favorite: part.favorite,
+              });
+              adsk.fusionSendData("toggleFavorite", payload);
             }
-          });
+          } catch (e) {
+            console.error("toggleFavorite send error:", e);
+          }
+        });
 
-          row.addEventListener("click", () => {
-            selectedIndex = part.index;
-            sendInsertPart(part.index);
-            renderPartsList();
-          });
-        }
+        row.addEventListener("click", () => {
+          selectedIndex = part.index;
+          sendInsertPart(part.index);
+          renderPartsList();
+        });
 
         row.appendChild(icon);
         row.appendChild(textCol);
@@ -762,6 +756,7 @@
     window.fusionJavaScriptHandler = {
       handle: function (action, data) {
         try {
+          console.log( 'window.fusionJavaScriptHandler() -- Received action', action);
           if (action === "partsList") {
             console.log( 'Loading parts list...')
             const parts = JSON.parse(data || "[]");
@@ -772,7 +767,6 @@
                 label: p.label,
                 favorite: !!p.favorite,
                 thumb: p.thumb || null,
-                loading: p.loading
               }));
             } else {
               allParts = [];
@@ -780,9 +774,10 @@
             selectedIndex = null;
             buildFolderTree();
             applyFilter();
-            setLoadingOverlay();
-          } else if (action === "debugger") {
-            debugger;
+          } else if (action === "busy") {
+            setLoadingOverlay( true );
+          } else if (action === "activate") {
+            setLoadingOverlay( false );
           } else {
             return "Unexpected action: " + action;
           }
@@ -816,9 +811,15 @@
       applyTheme(initialTheme);
     });
 
+    function folderSelectionChanged(path) {
+      console.log( 'Selected folder ', path.join('/') );
+      adsk.fusionSendData("folderRequest", path.join('/'));
+    }
+
     function requestPartsFromFusion() {
       try {
         if (typeof adsk !== "undefined" && adsk.fusionSendData) {
+          adsk.fusionSendData("ready", "");
           adsk.fusionSendData("requestParts", "");
         } else {
           console.log( 'Retrying parts request ', requestPartsTries );
@@ -844,10 +845,12 @@
       }
     }
 
-    function setLoadingOverlay() {
-      if( allParts[0].loading ) {
+    function setLoadingOverlay( isBusy ) {
+      if( isBusy ) {
+        console.log( "Turning overlay ON");
         document.getElementById("overlay").style.display = "block";
       } else {
+        console.log( "Turning overlay OFF");
         document.getElementById("overlay").style.display = "none";
       }
     }
