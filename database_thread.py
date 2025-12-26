@@ -102,7 +102,7 @@ class FolderUpdateJob:
         global g_parts_db
         global g_update_queue
 
-        futil.log(f'Running step {self.phase} on folder {self.record.path}')
+        # futil.log(f'Running step {self.phase} on folder {self.record.path}')
 
         match self.phase:
             case FolderJobPhase.PROCESS_FOLDERS:
@@ -135,9 +135,9 @@ class FolderUpdateQueue:
         self.queue.put(job)
 
     def pop(self) -> FolderUpdateJob:
-        futil.log(f'FolderUpdateQueue::pop() -- Jobs remaining {self.queue.qsize()}.')
         if self.queue.empty():
             return None
+        futil.log(f'FolderUpdateQueue::pop() -- Jobs remaining {self.queue.qsize()}.')
         return self.queue.get()
 
 class PartsDatabaseFileIO:
@@ -230,20 +230,31 @@ class PartsDatabaseFileIO:
         icon_name = get_icon_filename(path, dataFile.name)
         self.thumbnail_jobs.put((icon_name, dataFile.thumbnail))
 
-    def process_one_thumbnail_job(self):
+    def is_thumbnail_job_waiting(self):
+        return not self.thumbnail_jobs.empty()
+
+    def process_thumbnail_jobs(self, maxNumber: int = -1):
+        # Process at most maxNumber of thumbnail jobs
+        # If maxNumber = -1 process all available jobs
+        # Returns True if some thumbnails were saved
         if self.thumbnail_jobs.empty():
             # No more jobs to process
             return False
         
-        try:
-            icon_name, thumb_future = self.thumbnail_jobs.get()
-            thumb_future: adsk.core.DataObjectFuture = thumb_future
-            idx = 0
-            while thumb_future.state != adsk.core.FutureStates.FinishedFutureState:
-                idx = idx + 1
-                time.sleep( 0.05 )
-                if idx > 50:
-                    break
+        if maxNumber == -1:
+            maxNumber = 200
+        
+        start_time = time.time()
+        TIMEOUT = 5.0
+        idx = 0
+        saved_files = 0
+        # Only allow 5 seconds for processing
+        while not self.thumbnail_jobs.empty() and idx < maxNumber and time.time() - start_time < TIMEOUT:
+            idx = idx + 1
+            job = self.thumbnail_jobs.get()
+            icon_name = job[0]
+            thumb_future: adsk.core.DataObjectFuture = job[1]
+            # futil.log(f'Processing thumbnail {icon_name} ...')
 
             if thumb_future.state == adsk.core.FutureStates.FinishedFutureState:
                 try:
@@ -254,15 +265,21 @@ class PartsDatabaseFileIO:
                         except:
                             pass
                         thumb_future.dataObject.saveToFile( icon_name )
+                        saved_files = saved_files + 1
                 except:
                     futil.handle_error(f'   Error processing thumbnail {icon_name}...')
+            elif thumb_future.state == adsk.core.FutureStates.ProcessingFutureState:
+                # Not done.  Put it and the end of the line
+                self.thumbnail_jobs.put( job )
+                time.sleep(0.05)
             else:
-                futil.log(f'   Timed out waiting for thumbnail: {icon_name}...')
+                futil.log(f'   Retrieving thumbnail for {icon_name} failed...')
 
-        except:
-            pass
 
-        return True
+        if time.time() - start_time > TIMEOUT:
+            futil.log(f'   Processing thumbnails TIMED OUT!! ..')
+
+        return saved_files > 0
 
 
 class PartsDatabase:
@@ -307,7 +324,6 @@ class PartsDatabase:
         if path[-1] != '/':
             path = path + '/'
         self.mutex.acquire()
-        # heapq.heappush( self.sorted_list, (path, name, id, icon_name ))
         self.part_list.append((path, name, id, icon_name ))
         self.mutex.release()
         self.database['parts'][id] = { "path": path,
@@ -331,11 +347,11 @@ class PartsDatabase:
 
     def add_folder_placeholder(self, path):
         id = path + '_placeholder_'
-        self.add_part(id, path, '', '')
+        self.add_part(id, path, '_placeholder_', '')
 
     def remove_folder_placeholder(self, path):
         id = path + '_placeholder_'
-        self.remove_part(id, path, '')
+        self.remove_part(id, path, '_placeholder_')
 
     def get_part(self, id):
         try:
@@ -365,17 +381,19 @@ class PartsDatabase:
         return len(self.part_list) > 0
 
     def update_folder(self, path):
+        global g_update_queue
+
         dfRec = self.io.get_data_folder( path )
         if not dfRec:
             futil.log( f'update_folder() -- Error loading "{path}".')
             return False
         
-        if dfRec.areChildrenUpdated and dfRec.areFilesUpdated:
+        if g_update_queue.empty() and dfRec.areChildrenUpdated and dfRec.areFilesUpdated:
             # Both the files and the folder have been updated
             # so add this folder to the job queue to check for
-            # any changes since running Fusion
-            global g_update_queue
+            # any changes since running Fusion but turn recursion off
             g_update_queue.push(FolderUpdateJob(dfRec,False))
+            return
         
         # Only update if not already done
         if not dfRec.areChildrenUpdated:
@@ -399,7 +417,7 @@ class PartsDatabase:
         # Otherwise they won't show up in the list in the palette.
         for fdr in rec._childFolders:
             child: FolderRecord = rec._childFolders[fdr]
-            if len(child._files) == 0:
+            if len(child._files) == 0 and len(child._childFolders) == 0:
                 self.add_folder_placeholder(child.path)
 
         # Remove the placeholder entry for this folders if
@@ -420,7 +438,7 @@ class PartsDatabase:
             self.mutex.acquire()
             while idx < len(self.part_list):
                 p = self.part_list[idx]
-                if p[0] == rec.path and not p[2] in rec._files:
+                if p[1] != '_placeholder_' and p[0] == rec.path and not p[2] in rec._files:
                     self.part_list.pop(idx)
                     delete_ids.append(p[2])
                 else:
@@ -430,6 +448,7 @@ class PartsDatabase:
             self.mutex.release()
 
         for id in delete_ids:
+            futil.log(f'   Removing database part id = {id}')
             del self.database['parts'][id]
 
 
@@ -520,11 +539,12 @@ class DatabaseThread(threading.Thread):
             # Create the parts file IO database
             g_parts_db_io = PartsDatabaseFileIO( find_project() )
 
+            # Create the update queue and add the root folder to it.
+            g_update_queue = FolderUpdateQueue(FolderUpdateJob(g_parts_db_io.rootRec))
+
             # Load the parts database
             g_parts_db = PartsDatabase(g_parts_db_io)
 
-            # Create the update queue and add the root folder to it.
-            g_update_queue = FolderUpdateQueue(FolderUpdateJob(g_parts_db_io.rootRec))
 
             # Wait until the palette has loaded then activate it.
             idx = 1
@@ -542,20 +562,14 @@ class DatabaseThread(threading.Thread):
             # Fire an event that tells the Palette to refresh.
             app.fireCustomEvent( myCustomEvent, "update" )
 
-            need_refresh = False
-            current_job = g_update_queue.pop()
-
+            current_job = None
             # Start the main processing loop for the database thread...
             while self.isRunning():
                 # Check if there are thumbnail images to process
-                # Process them one at a time then 'update' the palette
-                # when all thumbnail jobs are done.
-                more_jobs = g_parts_db_io.process_one_thumbnail_job()
-                if more_jobs:
-                    need_refresh = True
-                elif need_refresh:
-                    # All thumbnails are processed
-                    need_refresh = False
+                # Process them then 'update' the palette if some
+                # thumbnail files were created.
+                wereFilesSaved = g_parts_db_io.process_thumbnail_jobs()
+                if wereFilesSaved:
                     app.fireCustomEvent( myCustomEvent, "update" )
 
                 # Now process other folders that have not been refreshed
@@ -566,15 +580,16 @@ class DatabaseThread(threading.Thread):
 
                         if not current_job:
                             # We just finished the last job in the queue
-                            app.fireCustomEvent( myCustomEvent, "update" )
+                            # Save the JSON file to disk
                             g_parts_db.save_json_file()
 
-                # Grab a new job one has become available
-                if not g_update_queue.empty() and not current_job:
-                    current_job = g_update_queue.pop()
-
-                time.sleep( 0.05 )
-
+                if not current_job:
+                    if g_update_queue.empty():
+                        # Nothing to do just sleep for a bit
+                        time.sleep( 0.1 )
+                    else:
+                        # Grab a new job
+                        current_job = g_update_queue.pop()
 
             g_parts_db.save_json_file()
             futil.log(f'DatabaseThread() -- Finishing normally...')

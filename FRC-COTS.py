@@ -193,11 +193,11 @@ def load_palette():
         if not palette:
             return
         
-        try:
-            palette.isVisible = True
-        except:
-            # If Fusion is unhappy about toggling visibility, just ignore it.
-            pass
+        # try:
+        #     palette.isVisible = True
+        # except:
+        #     # If Fusion is unhappy about toggling visibility, just ignore it.
+        #     pass
 
         parts = []
         cots_files = database_thread.get_sorted_database_list()

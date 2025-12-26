@@ -344,7 +344,7 @@
 
     #overlay {
       position: fixed;
-      display: block;
+      display: none;
       width: 100%;
       height: 100%;
       /* top: 0;
@@ -674,6 +674,10 @@
 
         container.appendChild(fRow);
       });
+      // Check for only the placeholder entry for empty folders
+      if( node.parts.length == 1 && node.parts[0].label == '_placeholder_') {
+        node.parts.pop()
+      }
 
       // Parts directly in this folder
       node.parts.forEach((part) => {
@@ -819,6 +823,7 @@
     function requestPartsFromFusion() {
       try {
         if (typeof adsk !== "undefined" && adsk.fusionSendData) {
+          setLoadingOverlay( false )
           adsk.fusionSendData("ready", "");
           adsk.fusionSendData("requestParts", "");
         } else {
@@ -855,6 +860,7 @@
       }
     }
 
+    setLoadingOverlay( true )
     // For some reason we need to delay requesting parts a tiny bit...
     requestPartsTries = 1
     requestPartsFromFusion();
