@@ -52,6 +52,7 @@ class FolderRecord:
         self.parentFolder = parent
         self._files = {}  # [id] -> FileRecord
         self.name = name
+        self.has_placeholder = False
         if parent:
             self.path = parent.path + name + '/'
         else:
@@ -218,6 +219,7 @@ class PartsDatabaseFileIO:
 
     def load_folder_children(self, fRec: FolderRecord):
         fRec.areChildrenUpdated = True
+        fRec._childFolders = {}
         for df in fRec.dataFolder.dataFolders:
             self.record_mutex.acquire()
             fRec.add_child(FolderRecord(df.name, df, fRec))
@@ -225,6 +227,7 @@ class PartsDatabaseFileIO:
 
     def load_folder_files(self, fRec: FolderRecord, ui_priority: bool):
         fRec.areFilesUpdated = True
+        fRec._files = {}
         for df in fRec.dataFolder.dataFiles:
             if df.fileExtension and df.fileExtension.lower() == 'f3d':
                 self.record_mutex.acquire()
@@ -316,6 +319,7 @@ class PartsDatabase:
         self.building = False
         self.database['project'] = {}
         self.database['parts'] = {}
+        self.database['paths'] = {}
 
         if not self.load_json_file():
             self.blank_database()
@@ -334,8 +338,7 @@ class PartsDatabase:
         self.building = True
         self.database['project'] = {'name': self.io.project.name, 'id': self.io.project.id }
         self.database['parts'] = {}
-        self.mutex.acquire()
-        self.mutex.release()
+        self.database['paths'] = {}
 
     def add_part(self, id, path, name, version):
         
@@ -343,6 +346,10 @@ class PartsDatabase:
         if path[-1] != '/':
             path = path + '/'
         self.mutex.acquire()
+        if not path in self.database['paths']:
+            self.database['paths'][path] = []
+        if not id in self.database['paths'][path]:
+            self.database['paths'][path].append(id)
         self.database['parts'][id] = { "path": path,
                                        "name": name,
                                        "version": version, 
@@ -352,9 +359,16 @@ class PartsDatabase:
     def remove_part(self, id):
         try:
             self.mutex.acquire()
+            part = self.database['parts'][id]
+            path = part['path']
+            self.database['paths'][path].remove(id)
+            if len(self.database['paths'][path]) == 0:
+                del self.database['paths'][path]
+
             del self.database['parts'][id]
+
         except:
-            pass
+            futil.handle_error(f'remove_part() id = {id}')
         finally:
             self.mutex.release()
 
@@ -364,6 +378,9 @@ class PartsDatabase:
         self.add_part(id, path, '_placeholder_', '')
 
     def remove_folder_placeholder(self, path):
+        if path == '/':
+            return
+        
         id = path + '_placeholder_'
         self.remove_part(id)
 
@@ -421,11 +438,13 @@ class PartsDatabase:
         for fdr in rec._childFolders:
             child: FolderRecord = rec._childFolders[fdr]
             if len(child._files) == 0 and len(child._childFolders) == 0:
+                child.has_placeholder = True
                 self.add_folder_placeholder(child.path)
 
         # Remove the placeholder entry for this folders if
         # we now have either child folders or files
-        if len(rec._files) > 0 or len(rec._childFolders) > 0:
+        if (len(rec._files) > 0 or len(rec._childFolders)) > 0 and rec.has_placeholder:
+            rec.has_placeholder = False
             self.remove_folder_placeholder(rec.path)
 
     def sync_record_with_database(self, rec: FolderRecord):
@@ -433,7 +452,27 @@ class PartsDatabase:
         for id in rec._files:
             f: FileRecord = rec._files[id]
             self.add_part(id, rec.path, f.dataFile.name, f.dataFile.versionNumber)
-        
+
+        # Remove any child folders that have been deleted
+        child_paths = []
+        for fdr in rec._childFolders:
+            child: FolderRecord = rec._childFolders[fdr]
+            child_paths.append( child.path )
+
+        delete_paths = []
+        path_length = len(rec.path.split('/'))
+        for path in self.database['paths']:
+            if path.find(rec.path) == 0 and len(path.split('/')) == path_length + 1:
+                if not path in child_paths:
+                    delete_paths.append(path)
+
+        # Remove the paths that are no longer there
+        for path in delete_paths:
+            # Remove all the parts.  remove_part() will delete the path
+            # entry when there are no more parts
+            for fid in self.database['paths'][path]:
+                self.remove_part(fid)
+                
         # Remove any parts that have been deleted from the project
         delete_ids = []
         try:
@@ -577,7 +616,7 @@ class DatabaseThread(threading.Thread):
 
                 # Now process other folders that have not been refreshed
                 if current_job and not current_job.done():
-                    time.sleep(0.05)
+                    time.sleep(0.02)
                     current_job.run_step()
                     if current_job.done():
                         current_job = g_update_queue.pop()
