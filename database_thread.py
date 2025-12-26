@@ -145,8 +145,9 @@ class FolderUpdateQueue:
     def pop(self) -> FolderUpdateJob:
         if self.queue.empty():
             return None
-        futil.log(f'FolderUpdateQueue::pop() -- Jobs remaining {self.queue.qsize()}.')
-        return self.queue.get()
+        job: FolderUpdateJob = self.queue.get()
+        futil.log(f'Queue::pop(size={self.queue.qsize()}) -- Working on {job.record.path}')
+        return job
 
 class PartsDatabaseFileIO:
     def __init__(self, project: adsk.core.DataProject):
@@ -155,6 +156,21 @@ class PartsDatabaseFileIO:
         self.record_mutex = threading.Lock()
         self.thumbnail_jobs = Queue()
         self.priority_thumbnail_jobs = Queue()
+
+    def get_data_file(self, path, id):
+        futil.log( f'get_data_file() -- Getting data file at {path} with id={id}...')
+        
+        fRec = self.get_data_folder(path)
+        if not fRec:
+            futil.log( f'    Cannot find dataFolder {path}.')
+            return None
+        
+        fileRec = fRec.get_file(id)
+        if fileRec:
+            return fileRec
+        
+        self.load_folder_files(fRec, True)
+        return fRec.get_file(id)
 
     def get_data_folder(self, path: str) -> FolderRecord:
         if path == '/':
@@ -297,7 +313,6 @@ class PartsDatabase:
     def __init__(self, io: PartsDatabaseFileIO):
         self.io = io
         self.mutex = threading.Lock()
-        self.part_list = []
         self.database = {}
         self.building = False
         self.database['project'] = {}
@@ -315,43 +330,32 @@ class PartsDatabase:
         if len(self.database['parts']) == 0:
             self.update_folder('/')
 
-        self.build_part_list()
-
     def blank_database(self):
         self.database = {}
         self.building = True
         self.database['project'] = {'name': self.io.project.name, 'id': self.io.project.id }
         self.database['parts'] = {}
         self.mutex.acquire()
-        self.part_list = []
         self.mutex.release()
 
     def add_part(self, id, path, name, version):
-        if id in self.database['parts']:
-            # Already in the database
-            return
         
         icon_name = get_icon_filename(path, name)
         if path[-1] != '/':
             path = path + '/'
         self.mutex.acquire()
-        self.part_list.append((path, name, id, icon_name ))
-        self.mutex.release()
         self.database['parts'][id] = { "path": path,
                                        "name": name,
                                        "version": version, 
                                        "icon": icon_name }
+        self.mutex.release()
 
-    def remove_part(self, id, path, name):
+    def remove_part(self, id):
         try:
-            if path[-1] != '/':
-                path = path + '/'
             self.mutex.acquire()
-            for part in self.part_list:
-                if part[0] == path and part[1] == name:
-                    self.part_list.remove(part)
-                    self.database['parts'].pop(id)
-                    break
+            del self.database['parts'][id]
+        except:
+            pass
         finally:
             self.mutex.release()
 
@@ -362,7 +366,7 @@ class PartsDatabase:
 
     def remove_folder_placeholder(self, path):
         id = path + '_placeholder_'
-        self.remove_part(id, path, '_placeholder_')
+        self.remove_part(id)
 
     def get_part(self, id):
         try:
@@ -373,20 +377,12 @@ class PartsDatabase:
         
     def get_sorted_list(self):
         self.mutex.acquire()
-        sorted_list = sorted( self.part_list, key=lambda part: part[0]+part[1] )
+        sorted_list = [(data['path'], data['name'], data['version'], data['icon']) for id, data in self.database['parts'].items()]
         self.mutex.release()
-        return sorted_list
 
-    def build_part_list(self):
-        self.mutex.acquire()
-        self.part_list = []
-        self.mutex.release()
-        for file_id in self.database['parts']:
-            p = self.database['parts'][file_id]
-            self.mutex.acquire()
-            # heapq.heappush( self.sorted_list, (p['path'], p['name'], file_id, p['icon'] ))
-            self.part_list.append((p['path'], p['name'], file_id, p['icon']))
-            self.mutex.release()
+        sorted_list.sort()
+
+        return sorted_list
 
     def update_folder(self, path):
         global g_update_queue
@@ -439,19 +435,15 @@ class PartsDatabase:
             f: FileRecord = rec._files[id]
             self.add_part(id, rec.path, f.dataFile.name, f.dataFile.versionNumber)
         
-        # Remove any that have been deleted from the project
+        # Remove any parts that have been deleted from the project
         delete_ids = []
-        idx = 0
         try:
             self.mutex.acquire()
-            while idx < len(self.part_list):
-                p = self.part_list[idx]
-                if p[1] != '_placeholder_' and p[0] == rec.path and not p[2] in rec._files:
-                    self.part_list.pop(idx)
-                    delete_ids.append(p[2])
-                else:
-                    # Only increment if we didn't pop an item
-                    idx = idx + 1
+            for fid in self.database['parts']:
+                part = self.database['parts'][fid]
+                if part['name'] != '_placeholder_' and part['path'] == rec.path and not fid in rec._files:
+                    delete_ids.append(fid)
+
         finally:
             self.mutex.release()
 
@@ -481,6 +473,15 @@ class PartsDatabase:
         except Exception:
             futil.handle_error(f"Could not write parts database file '{db_filename}'.")
 
+
+def get_data_file( path, data_file_id ):
+    global g_parts_db_io
+
+    df_entry: FileRecord = g_parts_db_io.get_data_file( path, data_file_id )
+    if not df_entry:
+        return None
+    
+    return df_entry.dataFile
 
 def load_folder( path ):
     global g_parts_db

@@ -436,7 +436,8 @@ def run(context):
         g_dbThread = database_thread.DatabaseThread()
         g_dbThread.start()
 
-        load_palette()
+        # Create the palette
+        pal = get_or_create_palette(ui)
 
     except:
         ui.messageBox('Add-in run failed:\n{}'.format(traceback.format_exc()))
