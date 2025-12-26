@@ -2,7 +2,6 @@ import adsk.core
 import os
 import threading
 import time
-import heapq
 import json
 import re
 from queue import Queue
@@ -377,7 +376,7 @@ class PartsDatabase:
         
     def get_sorted_list(self):
         self.mutex.acquire()
-        sorted_list = [(data['path'], data['name'], data['version'], data['icon']) for id, data in self.database['parts'].items()]
+        sorted_list = [(data['path'], data['name'], id, data['icon']) for id, data in self.database['parts'].items()]
         self.mutex.release()
 
         sorted_list.sort()
