@@ -24,6 +24,10 @@ g_dbThread = None
 app = adsk.core.Application.get()
 ui = app.userInterface
 
+# Resource location for command icons, here we assume a sub folder in this directory named "resources".
+ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', '')
+
+
 def _ensure_file_paths_exist():
     if not os.path.exists(config.PARTS_DB_FOLDER):
         futil.popup_error(f'PARTS_DB_FOLDER = "{config.PARTS_DB_FOLDER}" does not exist!  '
@@ -219,7 +223,7 @@ def get_or_create_palette(ui: adsk.core.UserInterface) -> adsk.core.Palette:
     """Create or return the HTML palette used to browse COTS parts."""
     global g_palette
 
-    futil.log(f'get_or_create_palette()....')
+    # futil.log(f'get_or_create_palette()....')
 
     pal_id = 'FRC_COTS_Palette'
     # If we already have a valid reference, reuse it
@@ -250,6 +254,8 @@ def get_or_create_palette(ui: adsk.core.UserInterface) -> adsk.core.Palette:
         pal.incomingFromHTML.add(html_handler)
         handlers.append(html_handler)
 
+        pal.isVisible = False
+
     g_palette = pal
     return pal
 
@@ -258,25 +264,28 @@ class DatabaseThreadEventHandler(adsk.core.CustomEventHandler):
         super().__init__()
     def notify(self, args: adsk.core.CustomEventArgs):
 
-        futil.log( f'DatabaseThreadEventHandler() -- Event "{args.additionalInfo}"')
+        eventArgs = json.loads(args.additionalInfo)
+        action = eventArgs['action']
+        data = eventArgs['data']
+        futil.log( f'DatabaseThreadEventHandler() -- Event "{action}"')
 
-        if args.additionalInfo == "busy":
+        if action == "set_busy":
             palette = get_or_create_palette(ui)
             if not palette:
                 return
-            palette.sendInfoToHTML( 'busy', '')
+            palette.sendInfoToHTML( 'set_busy', data)
 
-        elif args.additionalInfo == "activate":
-            palette = get_or_create_palette(ui)
-            if not palette:
-                return
-            palette.sendInfoToHTML( 'activate', '')
-
-        elif args.additionalInfo == "update":
+        elif action == "update":
             load_palette()
 
+        elif action == "status":
+            palette = get_or_create_palette(ui)
+            if not palette:
+                return
+            palette.sendInfoToHTML( 'status', data)
+
         else:
-            futil.log( f'    ---------- Unhandled event "{args.additionalInfo}"  ---------')
+            futil.log( f'    ---------- Unhandled event "{action}"  ---------')
 
 class FRCHTMLHandler(adsk.core.HTMLEventHandler):
     """Handles messages coming from the HTML palette."""
@@ -379,7 +388,8 @@ def run(context):
             cmd_def = ui.commandDefinitions.addButtonDefinition(
                 cmd_id,
                 'FRC COTS Library',
-                'Open the FRC COTS library palette to insert components'
+                'Open the FRC COTS library palette to insert components',
+                ICON_FOLDER
             )
 
         global customEvent
@@ -418,11 +428,10 @@ def run(context):
         if insert_panel:
             control = insert_panel.controls.itemById(cmd_id)
             if not control:
-                insert_panel.controls.addCommand(cmd_def, '')
+                control = insert_panel.controls.addCommand(cmd_def, '')
 
-        # Load favorites and COTS list once when the add-in starts
+        # Load favorites 
         load_favorites()
-        # load_cots_files(app)
 
         g_dbThread = database_thread.DatabaseThread()
         g_dbThread.start()

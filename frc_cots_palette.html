@@ -314,6 +314,14 @@
       text-overflow: ellipsis;
     }
 
+    .statusLine {
+      font-size: 7px;
+      color: var(--fg-subtle);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .breadcrumb {
       font-size: 11px;
       color: var(--fg-subtle);
@@ -344,18 +352,12 @@
 
     #overlay {
       position: fixed;
-      display: none;
+      display: block;
       width: 100%;
       height: 100%;
-      /* top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0; */
       background-color: rgba(0,0,0,0.5);
       z-index: 20;
       cursor: pointer;
-      /* justify-content: center;
-      align-items: center; */
     }
 
     #overlay-content {
@@ -406,6 +408,11 @@
         or adjust your search.
       </div>
     </div>
+
+    <div id="statusLine">
+      Starting up...
+    </div>
+
   </div>
 
   <script>
@@ -778,10 +785,11 @@
             selectedIndex = null;
             buildFolderTree();
             applyFilter();
-          } else if (action === "busy") {
-            setLoadingOverlay( true );
-          } else if (action === "activate") {
-            setLoadingOverlay( false );
+          } else if (action === "set_busy") {
+            isBusy = data != '0'
+            setLoadingOverlay( isBusy );
+          } else if (action === "status") {
+            document.getElementById("statusLine").textContent = data;
           } else {
             return "Unexpected action: " + action;
           }
@@ -849,6 +857,14 @@
         console.error("insertPart send error:", e);
       }
     }
+
+    // function setUpdating( isBusy ) {
+    //   if( isBusy ) {
+    //     document.getElementById("statusLine").textContent = "Updating ...";
+    //   } else {
+    //     document.getElementById("statusLine").textContent = "Idle.";
+    //   }
+    // }
 
     function setLoadingOverlay( isBusy ) {
       if( isBusy ) {

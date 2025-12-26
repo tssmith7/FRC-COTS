@@ -39,6 +39,14 @@ def get_icon_filename( path:str, basename:str ):
     folder = config.PARTS_DB_PATH
     return os.path.join(folder, 'icons', f'{flat_path}{safeName}.png')
 
+def send_event_to_main_thread(action, data):
+    # action is one of:
+    #   'set_busy' -> set the palette busy state, data is '0' or '1'
+    #   'update' -> tell the palette to update, data is ''
+    #   'status' -> set the status line, data is message (e.g. 'Idle.') 
+    args = {'action': action, 'data': data}
+    app.fireCustomEvent( myCustomEvent, json.dumps(args) )
+
 class FolderRecord:
     def __init__(self, name, dfolder: adsk.core.DataFolder, parent: 'FolderRecord'):
         self._childFolders = {}  # [name] -> FolderRecord
@@ -146,24 +154,7 @@ class PartsDatabaseFileIO:
         self.rootRec = FolderRecord( 'root', self.project.rootFolder, None )
         self.record_mutex = threading.Lock()
         self.thumbnail_jobs = Queue()
-
-    def get_data_file(self, path, id):
-        futil.log( f'get_data_file() -- Getting data file at {path} with id={id}...')
-        
-        fRec = self.get_data_folder(path)
-        if not fRec:
-            futil.log( f'    Cannot find dataFolder {path}.')
-            return None
-        
-        fileRec = fRec.get_file(id)
-        if fileRec:
-            return fileRec.dataFile
-        
-        self.load_folder_files(fRec)
-        return fRec.get_file(id)
-
-    def get_all_data_files(self, path):
-        pass
+        self.priority_thumbnail_jobs = Queue()
 
     def get_data_folder(self, path: str) -> FolderRecord:
         if path == '/':
@@ -217,69 +208,87 @@ class PartsDatabaseFileIO:
             fRec.add_child(FolderRecord(df.name, df, fRec))
             self.record_mutex.release()
 
-    def load_folder_files(self, fRec: FolderRecord):
+    def load_folder_files(self, fRec: FolderRecord, ui_priority: bool):
         fRec.areFilesUpdated = True
         for df in fRec.dataFolder.dataFiles:
             if df.fileExtension and df.fileExtension.lower() == 'f3d':
                 self.record_mutex.acquire()
                 fRec.add_file(FileRecord(df, fRec))
                 self.record_mutex.release()
-                self.add_thumbnail_job(fRec.path, df)
+                self.add_thumbnail_job(fRec.path, df, ui_priority)
 
-    def add_thumbnail_job(self, path, dataFile: adsk.core.DataFile):
+    def add_thumbnail_job(self, path, dataFile: adsk.core.DataFile, ui_priority: bool):
         icon_name = get_icon_filename(path, dataFile.name)
-        self.thumbnail_jobs.put((icon_name, dataFile.thumbnail))
+        if ui_priority:
+            self.priority_thumbnail_jobs.put((icon_name, dataFile.thumbnail))
+        else:
+            self.thumbnail_jobs.put((icon_name, dataFile.thumbnail))
 
     def is_thumbnail_job_waiting(self):
         return not self.thumbnail_jobs.empty()
+
+    def process_one_thumbnail_job(self, queue: Queue):
+        # Process a single job from the queue and return
+        # True if an icon file was saved.
+        job = queue.get()
+        icon_name = job[0]
+        thumb_future: adsk.core.DataObjectFuture = job[1]
+        # futil.log(f'Processing thumbnail {icon_name} ...')
+
+        if thumb_future.state == adsk.core.FutureStates.FinishedFutureState:
+            try:
+                if thumb_future.dataObject != None:
+                    # futil.log(f'Creating thumbnail for {icon_name}')
+                    try:
+                        os.remove( icon_name )
+                    except:
+                        pass
+                    thumb_future.dataObject.saveToFile( icon_name )
+                    return True
+            except:
+                futil.handle_error(f'   Error processing thumbnail {icon_name}...')
+        elif thumb_future.state == adsk.core.FutureStates.ProcessingFutureState:
+            # Not done.  Put it and the end of the line
+            queue.put( job )
+            time.sleep(0.05)
+        else:
+            futil.log(f'   Retrieving thumbnail for {icon_name} failed...')
+
+        return False
 
     def process_thumbnail_jobs(self, maxNumber: int = -1):
         # Process at most maxNumber of thumbnail jobs
         # If maxNumber = -1 process all available jobs
         # Returns True if some thumbnails were saved
-        if self.thumbnail_jobs.empty():
+        if self.thumbnail_jobs.empty() and self.priority_thumbnail_jobs.empty():
             # No more jobs to process
             return False
-        
+
+        start_time = time.time()
+        TIMEOUT = 2.0
+
+        need_update = False
+        # Process the priority thumbnails that were requested due to
+        # the UI navigation
+        while not self.priority_thumbnail_jobs.empty() and time.time() - start_time < TIMEOUT:
+            if self.process_one_thumbnail_job(self.priority_thumbnail_jobs):
+                # We processed a priority thumbnail and saved a file.
+                # Need to update the palette
+                need_update = True
+
         if maxNumber == -1:
             maxNumber = 200
         
-        start_time = time.time()
-        TIMEOUT = 5.0
         idx = 0
-        saved_files = 0
-        # Only allow 5 seconds for processing
+        # Only allow 2 seconds for processing
         while not self.thumbnail_jobs.empty() and idx < maxNumber and time.time() - start_time < TIMEOUT:
             idx = idx + 1
-            job = self.thumbnail_jobs.get()
-            icon_name = job[0]
-            thumb_future: adsk.core.DataObjectFuture = job[1]
-            # futil.log(f'Processing thumbnail {icon_name} ...')
-
-            if thumb_future.state == adsk.core.FutureStates.FinishedFutureState:
-                try:
-                    if thumb_future.dataObject != None:
-                        # futil.log(f'Creating thumbnail for {icon_name}')
-                        try:
-                            os.remove( icon_name )
-                        except:
-                            pass
-                        thumb_future.dataObject.saveToFile( icon_name )
-                        saved_files = saved_files + 1
-                except:
-                    futil.handle_error(f'   Error processing thumbnail {icon_name}...')
-            elif thumb_future.state == adsk.core.FutureStates.ProcessingFutureState:
-                # Not done.  Put it and the end of the line
-                self.thumbnail_jobs.put( job )
-                time.sleep(0.05)
-            else:
-                futil.log(f'   Retrieving thumbnail for {icon_name} failed...')
-
+            self.process_one_thumbnail_job(self.thumbnail_jobs)
 
         if time.time() - start_time > TIMEOUT:
             futil.log(f'   Processing thumbnails TIMED OUT!! ..')
 
-        return saved_files > 0
+        return need_update
 
 
 class PartsDatabase:
@@ -290,6 +299,7 @@ class PartsDatabase:
         self.mutex = threading.Lock()
         self.part_list = []
         self.database = {}
+        self.building = False
         self.database['project'] = {}
         self.database['parts'] = {}
 
@@ -309,6 +319,7 @@ class PartsDatabase:
 
     def blank_database(self):
         self.database = {}
+        self.building = True
         self.database['project'] = {'name': self.io.project.name, 'id': self.io.project.id }
         self.database['parts'] = {}
         self.mutex.acquire()
@@ -377,13 +388,10 @@ class PartsDatabase:
             self.part_list.append((p['path'], p['name'], file_id, p['icon']))
             self.mutex.release()
 
-    def database_loaded(self):
-        return len(self.part_list) > 0
-
     def update_folder(self, path):
         global g_update_queue
 
-        dfRec = self.io.get_data_folder( path )
+        dfRec = self.io.get_data_folder(path)
         if not dfRec:
             futil.log( f'update_folder() -- Error loading "{path}".')
             return False
@@ -401,16 +409,16 @@ class PartsDatabase:
 
         # Only update if not already done
         if not dfRec.areFilesUpdated:
-            self.update_record_parts(dfRec)
+            self.update_record_parts(dfRec, True)
 
         self.sync_record_with_database(dfRec)
 
     def update_record_subfolders(self, rec: FolderRecord):
         self.io.load_folder_children(rec)
 
-    def update_record_parts(self, rec: FolderRecord):
+    def update_record_parts(self, rec: FolderRecord, ui_priority: bool = False):
         # Load all of this folders data files
-        self.io.load_folder_files(rec)
+        self.io.load_folder_files(rec, ui_priority)
 
         # Add a placeholder entry for child folders if 
         # they do not have any files or child folders yet.
@@ -474,15 +482,6 @@ class PartsDatabase:
             futil.handle_error(f"Could not write parts database file '{db_filename}'.")
 
 
-def get_data_file( path, data_file_id ):
-    global g_parts_db_io
-
-    df_entry: FileRecord = g_parts_db_io.get_data_file( path, data_file_id )
-    if not df_entry:
-        return None
-    
-    return df_entry.dataFile
-
 def load_folder( path ):
     global g_parts_db
 
@@ -545,35 +544,40 @@ class DatabaseThread(threading.Thread):
             # Load the parts database
             g_parts_db = PartsDatabase(g_parts_db_io)
 
-
             # Wait until the palette has loaded then activate it.
             idx = 1
             while not g_palette_ready:
                 futil.log(f'DatabaseThread::run() -- Waiting to activate palette {idx}...')
                 time.sleep( 0.1 )
                 idx = idx + 1
-                if idx > 20:
+                if idx > 40:
                     break
 
-            app.fireCustomEvent( myCustomEvent, "activate" )
+            send_event_to_main_thread('set_busy', '0' )
 
             g_parts_db.save_json_file()
 
-            # Fire an event that tells the Palette to refresh.
-            app.fireCustomEvent( myCustomEvent, "update" )
+            if g_parts_db.building:
+                send_event_to_main_thread('status', 'Building index...' )
+            else:
+                send_event_to_main_thread('status', 'Updating...' )
 
-            current_job = None
+            # Fire an event that tells the Palette to refresh.
+            send_event_to_main_thread('update', '' )
+
+            current_job = g_update_queue.pop()
             # Start the main processing loop for the database thread...
             while self.isRunning():
                 # Check if there are thumbnail images to process
-                # Process them then 'update' the palette if some
+                # Process them then 'update' the palette if priority
                 # thumbnail files were created.
-                wereFilesSaved = g_parts_db_io.process_thumbnail_jobs()
-                if wereFilesSaved:
-                    app.fireCustomEvent( myCustomEvent, "update" )
+                need_update = g_parts_db_io.process_thumbnail_jobs()
+                if need_update:
+                    send_event_to_main_thread('update', '' )
 
                 # Now process other folders that have not been refreshed
                 if current_job and not current_job.done():
+                    time.sleep(0.05)
                     current_job.run_step()
                     if current_job.done():
                         current_job = g_update_queue.pop()
@@ -581,15 +585,18 @@ class DatabaseThread(threading.Thread):
                         if not current_job:
                             # We just finished the last job in the queue
                             # Save the JSON file to disk
+                            send_event_to_main_thread('status', 'Idle.' )
                             g_parts_db.save_json_file()
 
                 if not current_job:
-                    if g_update_queue.empty():
+                    if g_update_queue.empty():                        
                         # Nothing to do just sleep for a bit
                         time.sleep( 0.1 )
                     else:
                         # Grab a new job
                         current_job = g_update_queue.pop()
+                        if current_job:
+                            send_event_to_main_thread('status', 'Updating...' )
 
             g_parts_db.save_json_file()
             futil.log(f'DatabaseThread() -- Finishing normally...')
