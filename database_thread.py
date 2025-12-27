@@ -20,8 +20,6 @@ g_parts_db = None        # PartsDatabase object
 g_parts_db_io = None     # PartsDatabaseFileIO object
 g_update_queue = None    # Folder Update queue
 
-g_palette_ready = False     # HTML palette is fully loaded
-
 def sanitize_part_name( part_name:str ):
     safeName = re.sub(r'\W+', '', part_name)
     return safeName
@@ -99,9 +97,8 @@ class FolderJobPhase(Enum):
     DONE = 4
 
 class FolderUpdateJob:
-    def __init__(self, rec: FolderRecord, recurse: bool = True):
+    def __init__(self, rec: FolderRecord):
         self.record = rec
-        self.recurse = recurse
         self.phase = FolderJobPhase.PROCESS_FOLDERS
 
     def run_step(self):
@@ -113,10 +110,9 @@ class FolderUpdateJob:
 
         match self.phase:
             case FolderJobPhase.PROCESS_FOLDERS:
-                g_parts_db.update_record_subfolders(self.record)
-                if self.recurse:
-                    for fdr in self.record._childFolders:
-                        g_update_queue.push(FolderUpdateJob(self.record.get_child(fdr)))
+                g_parts_db.reload_record_subfolders(self.record)
+                for fdr in self.record._childFolders:
+                    g_update_queue.push(FolderUpdateJob(self.record.get_child(fdr)))
                 self.phase = FolderJobPhase.PROCESS_FILES
             case FolderJobPhase.PROCESS_FILES:
                 g_parts_db.update_record_parts(self.record)
@@ -129,6 +125,28 @@ class FolderUpdateJob:
 
     def done(self):
         return self.phase == FolderJobPhase.DONE
+
+class FolderViewedJob(FolderUpdateJob):
+
+    def run_step(self):
+        # Returns True if there is more to be done.
+        global g_parts_db
+        global g_update_queue
+
+        # futil.log(f'Running step {self.phase} on folder {self.record.path}')
+
+        match self.phase:
+            case FolderJobPhase.PROCESS_FOLDERS:
+                g_parts_db.update_record_subfolders(self.record)
+                self.phase = FolderJobPhase.PROCESS_FILES
+            case FolderJobPhase.PROCESS_FILES:
+                g_parts_db.update_record_parts(self.record)
+                self.phase = FolderJobPhase.SYNC_WITH_DATABASE
+            case FolderJobPhase.SYNC_WITH_DATABASE:
+                g_parts_db.sync_record_with_database(self.record)
+                self.phase = FolderJobPhase.DONE
+            case FolderJobPhase.DONE:
+                pass
 
 class FolderUpdateQueue:
     def __init__(self, job: FolderUpdateJob):
@@ -216,9 +234,16 @@ class PartsDatabaseFileIO:
         # Look inside the new folder since length of path_parts is greater than 1
         return self.find_folder_with_path( dfolder_path, fRec, path_parts[1:] )
 
-    def load_folder_children(self, fRec: FolderRecord):
+    def reload_folder_children(self, fRec: FolderRecord):
         fRec.areChildrenUpdated = True
         fRec._childFolders = {}
+        for df in fRec.dataFolder.dataFolders:
+            self.record_mutex.acquire()
+            fRec.add_child(FolderRecord(df.name, df, fRec))
+            self.record_mutex.release()
+
+    def update_folder_children(self, fRec: FolderRecord):
+        fRec.areChildrenUpdated = True
         for df in fRec.dataFolder.dataFolders:
             self.record_mutex.acquire()
             fRec.add_child(FolderRecord(df.name, df, fRec))
@@ -412,7 +437,7 @@ class PartsDatabase:
             # Both the files and the folder have been updated
             # so add this folder to the job queue to check for
             # any changes since running Fusion but turn recursion off
-            g_update_queue.push(FolderUpdateJob(dfRec,False))
+            g_update_queue.push(FolderViewedJob(dfRec))
             return
         
         # Only update if not already done
@@ -425,8 +450,11 @@ class PartsDatabase:
 
         self.sync_record_with_database(dfRec)
 
+    def reload_record_subfolders(self, rec: FolderRecord):
+        self.io.reload_folder_children(rec)
+
     def update_record_subfolders(self, rec: FolderRecord):
-        self.io.load_folder_children(rec)
+        self.io.update_folder_children(rec)
 
     def update_record_parts(self, rec: FolderRecord, ui_priority: bool = False):
         # Load all of this folders data files
@@ -567,7 +595,6 @@ class DatabaseThread(threading.Thread):
         global g_parts_db
         global g_parts_db_io
         global g_update_queue
-        global g_palette_ready
 
         try:
             futil.log(f'DatabaseThread::run()...')
@@ -580,15 +607,6 @@ class DatabaseThread(threading.Thread):
 
             # Load the parts database
             g_parts_db = PartsDatabase(g_parts_db_io)
-
-            # Wait until the palette has loaded then activate it.
-            idx = 1
-            while not g_palette_ready:
-                futil.log(f'DatabaseThread::run() -- Waiting to activate palette {idx}...')
-                time.sleep( 0.1 )
-                idx = idx + 1
-                if idx > 40:
-                    break
 
             send_event_to_main_thread('set_busy', '0' )
 

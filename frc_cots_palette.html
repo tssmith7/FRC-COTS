@@ -409,10 +409,11 @@
       </div>
     </div>
 
-    <div id="statusLine">
-      Starting up...
+    <div id="headerRow">
+      <div id="statusLine">
+        Starting up...
+      </div>
     </div>
-
   </div>
 
   <script>
@@ -857,14 +858,6 @@
         console.error("insertPart send error:", e);
       }
     }
-
-    // function setUpdating( isBusy ) {
-    //   if( isBusy ) {
-    //     document.getElementById("statusLine").textContent = "Updating ...";
-    //   } else {
-    //     document.getElementById("statusLine").textContent = "Idle.";
-    //   }
-    // }
 
     function setLoadingOverlay( isBusy ) {
       if( isBusy ) {

@@ -195,22 +195,12 @@ def _palette_html_path():
     """Path to the HTML palette file."""
     return os.path.join(os.path.dirname(__file__), 'frc_cots_palette.html')
 
-def load_palette():
-    """Load the HTML palette used to browse COTS parts."""
+def send_parts_to_palette(palette: adsk.core.Palette):
+    """Send the parts list to the HTML palette used to browse COTS parts."""
 
-    futil.log(f'load_palette()....')
+    futil.log(f'send_parts_to_palette()....')
 
     try:
-        palette = get_or_create_palette(ui)
-        if not palette:
-            return
-        
-        # try:
-        #     palette.isVisible = True
-        # except:
-        #     # If Fusion is unhappy about toggling visibility, just ignore it.
-        #     pass
-
         parts = []
         cots_files = database_thread.get_sorted_database_list()
         for idx, (path, label, dfid, icon_name) in enumerate(cots_files):
@@ -226,18 +216,29 @@ def load_palette():
     except:
         futil.handle_error('load_palette failed:')
 
+def get_palette() -> adsk.core.Palette:
+    """Return the HTML palette used to browse COTS parts."""
+    global g_palette
 
-def get_or_create_palette(ui: adsk.core.UserInterface) -> adsk.core.Palette:
+    # futil.log(f'get_palette()....')
+
+    # If we already have a valid reference, reuse it
+    if g_palette and g_palette.isValid:
+        return g_palette
+    
+    return None
+
+def create_palette() -> adsk.core.Palette:
     """Create or return the HTML palette used to browse COTS parts."""
     global g_palette
 
-    # futil.log(f'get_or_create_palette()....')
+    # futil.log(f'create_palette()....')
 
-    pal_id = 'FRC_COTS_Palette'
     # If we already have a valid reference, reuse it
     if g_palette and g_palette.isValid:
         return g_palette
 
+    pal_id = 'FRC_COTS_Palette'
     pal: adsk.core.Palette = ui.palettes.itemById(pal_id)
     if pal and not pal.isValid:
         # Stale palette, remove so we can recreate
@@ -262,6 +263,7 @@ def get_or_create_palette(ui: adsk.core.UserInterface) -> adsk.core.Palette:
         pal.incomingFromHTML.add(html_handler)
         handlers.append(html_handler)
 
+        pal.dockingState = adsk.core.PaletteDockingStates.PaletteDockStateRight
         pal.isVisible = False
 
     g_palette = pal
@@ -275,19 +277,22 @@ class DatabaseThreadEventHandler(adsk.core.CustomEventHandler):
         eventArgs = json.loads(args.additionalInfo)
         action = eventArgs['action']
         data = eventArgs['data']
-        futil.log( f'DatabaseThreadEventHandler() -- Event "{action}"')
+        futil.log( f'DatabaseThreadEventHandler() -- Event "{action} data = {data}"')
 
         if action == "set_busy":
-            palette = get_or_create_palette(ui)
+            palette = get_palette()
             if not palette:
                 return
             palette.sendInfoToHTML( 'set_busy', data)
 
         elif action == "update":
-            load_palette()
+            palette = get_palette()
+            if not palette:
+                return
+            send_parts_to_palette(palette)
 
         elif action == "status":
-            palette = get_or_create_palette(ui)
+            palette = get_palette()
             if not palette:
                 return
             palette.sendInfoToHTML( 'status', data)
@@ -305,15 +310,19 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
 
             futil.log( f'FRCHTMLHandler() -- Event "{action}"')
 
-            # HTML asks for the list of parts
-            if action == 'requestParts':
-                load_palette()
+            palette = get_palette()
+            if not palette:
+                futil.log( f'     ------------- ERROR Palette not valid!! ----------')
                 return
 
+            # HTML asks for the list of parts
+            if action == 'requestParts':
+                send_parts_to_palette(palette)
+
             # HTML palette is active and ready to receive data
+            # send it the parts list
             elif action == 'ready':
-                database_thread.g_palette_ready = True
-                futil.log(f'   FRCHTMLHandler() -- g_palette_ready = {database_thread.g_palette_ready}')
+                send_parts_to_palette(palette)
 
             # HTML tells us to insert the selected part at current canvas selection
             elif action == 'insertPart':
@@ -356,7 +365,7 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     folder = folder + '/'
                 futil.log( f'FRCHTMLHandler() -- Folder request for "{folder}"')
                 database_thread.load_folder( folder )
-                load_palette()
+                send_parts_to_palette(palette)
                 
             # HTML toggles favorite state for a part
             elif action == 'toggleFavorite':
@@ -373,7 +382,6 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     _, _label, dfid, _thumbidx = cots_files[idx]
                     g_favorites[dfid] = fav
                     save_favorites()
-                return
             elif action == "response":
                 pass
             else:
@@ -382,6 +390,40 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
         except:
             ui.messageBox('HTML palette error:\n{}'.format(traceback.format_exc()))
 
+class ShowPaletteCreatedHandler(adsk.core.CommandCreatedEventHandler):
+    def __init__(self):
+        super().__init__()
+
+    def notify(self, args):
+        global g_dbThread
+
+        futil.log(f'ShowPaletteCreatedHandler::notify()...')
+        palette_just_created = False
+        palette = get_palette()
+        if not palette:
+            # The palette needs to be created.
+            palette = create_palette()
+            palette_just_created = True
+            if not palette:
+                futil.log(f'     ----------  ERROR Unable to Create Palette! ----------')
+                return
+            
+        # There is an issue when a palette is first created and shown.
+        # It takes a while for the Fusion part of the palette to be
+        # ready to send/receive information (the adsk object).  For this
+        # reason when the palette is first created and shown we need to
+        # wait for the palette to send a 'ready' signal back before
+        # loading the parts database
+
+        try:
+            palette.isVisible = True
+        except:
+            # If Fusion is unhappy about toggling visibility, just ignore it.
+            pass
+
+        # Also call this line in the 'ready' message of FRCHTMLHandler()
+        if not palette_just_created:
+            send_parts_to_palette(palette)
 
 def run(context):
     global g_dbThread
@@ -406,25 +448,6 @@ def run(context):
         customEvent.add(onThreadEvent)
         handlers.append(onThreadEvent)
 
-        class ShowPaletteCreatedHandler(adsk.core.CommandCreatedEventHandler):
-            def __init__(self):
-                super().__init__()
-
-            def notify(self, args):
-
-                futil.log(f'ShowPaletteCreatedHandler::notify()...')
-                palette = get_or_create_palette(ui)
-                if not palette:
-                    return
-        
-                try:
-                    palette.isVisible = True
-                except:
-                    # If Fusion is unhappy about toggling visibility, just ignore it.
-                    pass
-
-                load_palette()
-
         on_created = ShowPaletteCreatedHandler()
         cmd_def.commandCreated.add(on_created)
         handlers.append(on_created)
@@ -441,11 +464,9 @@ def run(context):
         # Load favorites 
         load_favorites()
 
+        # Start the database thread
         g_dbThread = database_thread.DatabaseThread()
         g_dbThread.start()
-
-        # Create the palette
-        pal = get_or_create_palette(ui)
 
     except:
         ui.messageBox('Add-in run failed:\n{}'.format(traceback.format_exc()))
