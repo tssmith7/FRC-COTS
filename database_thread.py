@@ -178,7 +178,7 @@ class PartsDatabaseFileIO:
         
         fRec = self.get_data_folder(path)
         if not fRec:
-            futil.log( f'    Cannot find dataFolder {path}.')
+            futil.log_error( f'Cannot find dataFolder {path}.')
             return None
         
         fileRec = fRec.get_file(id)
@@ -217,7 +217,7 @@ class PartsDatabaseFileIO:
         # are looking for.
         dfolder = startRec.dataFolder.dataFolders.itemByName( path_parts[0] )
         if not dfolder:
-            futil.log( f'find_folder_with_path() Error finding folder {start_path}{path_parts[0]}...')
+            futil.log_error( f'find_folder_with_path() Error finding folder {start_path}{path_parts[0]}...')
             return None
 
         dfolder_path = start_path + dfolder.name + '/'
@@ -429,7 +429,7 @@ class PartsDatabase:
 
         dfRec = self.io.get_data_folder(path)
         if not dfRec:
-            futil.log( f'update_folder() -- Error loading "{path}".')
+            futil.log_error( f'update_folder() -- Error loading "{path}".')
             return False
         
         if g_update_queue.empty() and dfRec.areChildrenUpdated and dfRec.areFilesUpdated:
@@ -559,22 +559,22 @@ def get_sorted_database_list():
     
     return g_parts_db.get_sorted_list()
 
-def find_project():
+def find_project(name: str):
     try:
         data = app.data
         projects = data.dataProjects
 
         frc_project = None
         for proj in projects:
-            if proj.name == config.PARTS_DB_PROJECT:
+            if proj.name == name:
                 frc_project = proj
                 break
 
         if not frc_project:
-            futil.log(f"Could not find project '{config.PARTS_DB_PROJECT}'.")
+            futil.log_error(f"Could not find project '{name}'.")
             return None
     except:
-        futil.handle_error(f"Error loading project '{config.PARTS_DB_PROJECT}'.")
+        futil.handle_error(f"Error loading project '{name}'.")
 
     return frc_project
 
@@ -599,7 +599,11 @@ class DatabaseThread(threading.Thread):
             futil.log(f'DatabaseThread::run()...')
 
             # Create the parts file IO database
-            g_parts_db_io = PartsDatabaseFileIO( find_project() )
+            project = find_project(config.PARTS_DB_PROJECT)
+            if not project:
+                return
+            
+            g_parts_db_io = PartsDatabaseFileIO(project)
 
             # Create the update queue and add the root folder to it.
             g_update_queue = FolderUpdateQueue(FolderUpdateJob(g_parts_db_io.rootRec))

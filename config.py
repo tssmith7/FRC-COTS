@@ -21,7 +21,7 @@ DEBUG = False
 # sample_palette_id = f'{COMPANY_NAME}_{ADDIN_NAME}_palette_id'
 
 # Parts Database Project
-PARTS_DB_PROJECT = 'FRC 2025'
+PARTS_DB_PROJECT = 'FRC_COTS'
 
 # The path to store the database folder (this needs to exist)
 # PARTS_DB_FOLDER = os.path.dirname(__file__)   # Use the folder this file is in

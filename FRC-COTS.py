@@ -489,8 +489,6 @@ def run(context):
             # Call the startup handler to start the database thread.
             MyStartupCompletedHandler.notify('')
 
-        futil.log(f'  run() -- Startup completed = {app.isStartupComplete}')
-
     except:
         ui.messageBox('Add-in run failed:\n{}'.format(traceback.format_exc()))
 
