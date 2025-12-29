@@ -339,11 +339,24 @@ class PartsDatabase:
         self.io = io
         self.mutex = threading.Lock()
         self.database = {}
-        self.building = False
 
         if not self.load_json_file():
             self.blank_database()
+            return
         
+        # Make sure the main keys exist
+        if not 'built' in self.database:
+            self.blank_database()
+            return
+        
+        if not 'project' in self.database:
+            self.blank_database()
+            return
+
+        if not 'name' in self.database['project']:
+            self.blank_database()
+            return
+
         if self.database['project']['name'] != self.io.project.name:
             # The parts db is for a different project!
             futil.log(f'JSON project and the settings project do not match!')
@@ -352,7 +365,7 @@ class PartsDatabase:
 
     def blank_database(self):
         self.database = {}
-        self.building = True
+        self.database['built'] = False
         self.database['project'] = {'name': self.io.project.name, 'id': self.io.project.id }
         self.database['parts'] = {}
         self.database['paths'] = {}
@@ -625,10 +638,10 @@ class DatabaseThread(threading.Thread):
 
             busy_idx = 0
             busy_rounds = ['|', '/', '-', '\\']
-            if g_parts_db.building:
-                busy_text = 'Building index...'
-            else:
+            if g_parts_db.is_built():
                 busy_text = 'Updating...'
+            else:
+                busy_text = 'Building index...'
 
             busy_update_time = time.time()
             send_event_to_main_thread('status', busy_text + busy_rounds[busy_idx % 4] )
