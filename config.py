@@ -8,17 +8,21 @@ import os
 # more information is written to the Text Command window. Generally, it's useful
 # to set this to True while developing an add-in and set it to False when you
 # are ready to distribute it.
-DEBUG = False
+DEBUG = True
 
 # # Gets the name of the add-in from the name of the folder the py file is in.
 # # This is used when defining unique internal names for various UI elements 
 # # that need a unique name. It's also recommended to use a company name as 
 # # part of the ID to better ensure the ID is unique.
-# ADDIN_NAME = os.path.basename(os.path.dirname(__file__))
-# COMPANY_NAME = 'ACME'
+ADDIN_NAME = 'FRC_COTS'
+COMPANY_NAME = 'TEAM_5000'
+
+# Command IDS
+INSERT_PART_CMD_ID = f'{COMPANY_NAME}_{ADDIN_NAME}_insertPart'
+INSERT_SPACER_CMD_ID = f'{COMPANY_NAME}_{ADDIN_NAME}_insertSpacer'
 
 # # Palettes
-# sample_palette_id = f'{COMPANY_NAME}_{ADDIN_NAME}_palette_id'
+palette_id = f'{COMPANY_NAME}_{ADDIN_NAME}_palette_id'
 
 # Parts Database Project
 PARTS_DB_PROJECT = 'FRC_COTS'

@@ -4,6 +4,7 @@ import threading
 import time
 import json
 import re
+from datetime import datetime, timedelta
 from queue import Queue
 from enum import Enum
 
@@ -333,6 +334,8 @@ class PartsDatabaseFileIO:
 
 
 class PartsDatabase:
+    DATE_FORMAT = r'%d/%m/%y %H:%M:%S.%f'
+    EXPIRED_DATABASE = timedelta( 14 )  # Forteen days
     JSON_FILE = 'parts_db.json'
 
     def __init__(self, io: PartsDatabaseFileIO):
@@ -357,6 +360,16 @@ class PartsDatabase:
             self.blank_database()
             return
 
+        if not 'build_date' in self.database:
+            self.database['build_date'] = datetime.strftime(datetime(1900, 1, 1), PartsDatabase.DATE_FORMAT)
+
+        # Check if the database is too old.
+        build_date = datetime.strptime(self.database['build_date'], PartsDatabase.DATE_FORMAT)
+        if datetime.now() - build_date > PartsDatabase.EXPIRED_DATABASE:
+            futil.log(f'Expired database..  Build date = {build_date}')
+            self.blank_database()
+            return
+
         if self.database['project']['name'] != self.io.project.name:
             # The parts db is for a different project!
             futil.log(f'JSON project and the settings project do not match!')
@@ -366,6 +379,7 @@ class PartsDatabase:
     def blank_database(self):
         self.database = {}
         self.database['built'] = False
+        self.database['build_date'] = datetime.strftime(datetime(1900, 1, 1), PartsDatabase.DATE_FORMAT)
         self.database['project'] = {'name': self.io.project.name, 'id': self.io.project.id }
         self.database['parts'] = {}
         self.database['paths'] = {}
@@ -374,6 +388,8 @@ class PartsDatabase:
         return self.database['built']
 
     def build_complete(self):
+        timestr = datetime.strftime(datetime.now(), PartsDatabase.DATE_FORMAT)
+        self.database['build_date'] = timestr
         self.database['built'] = True
 
     def add_part(self, id, path, name, version):
@@ -407,6 +423,27 @@ class PartsDatabase:
             futil.handle_error(f'remove_part() id = {id}')
         finally:
             self.mutex.release()
+
+    def remove_part_at_path(self, id, path):
+        # If a part gets moved from one folder to another
+        # then the partID is still in the database but
+        # the path should be different
+        try:
+            self.mutex.acquire()
+            part = self.database['parts'][id]
+            id_path = part['path']
+            self.database['paths'][path].remove(id)
+            if len(self.database['paths'][path]) == 0:
+                del self.database['paths'][path]
+
+            if id_path == path:
+                del self.database['parts'][id]
+
+        except:
+            futil.handle_error(f'remove_part() id = {id}')
+        finally:
+            self.mutex.release()
+
 
 
     def add_folder_placeholder(self, path):
@@ -509,7 +546,7 @@ class PartsDatabase:
             # Remove all the parts.  remove_part() will delete the path
             # entry when there are no more parts
             for fid in self.database['paths'][path]:
-                self.remove_part(fid)
+                self.remove_part_at_path(fid, path)
                 
         # Remove any parts that have been deleted from the project
         delete_ids = []
