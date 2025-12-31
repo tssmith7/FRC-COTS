@@ -37,6 +37,14 @@ def get_icon_filename( path:str, basename:str ):
     folder = config.PARTS_DB_PATH
     return os.path.join(folder, 'icons', f'{flat_path}{safeName}.png')
 
+def delete_all_icons():
+    icon_path = os.path.join(config.PARTS_DB_PATH, 'icons')
+    for f in os.listdir(icon_path):
+        try:
+            os.remove(os.path.join(icon_path,f))
+        except:
+            pass
+
 def send_event_to_main_thread(action, data):
     # action is one of:
     #   'set_busy' -> set the palette busy state, data is '0' or '1'
@@ -367,6 +375,7 @@ class PartsDatabase:
         build_date = datetime.strptime(self.database['build_date'], PartsDatabase.DATE_FORMAT)
         if datetime.now() - build_date > PartsDatabase.EXPIRED_DATABASE:
             futil.log(f'Expired database..  Build date = {build_date}')
+            delete_all_icons()
             self.blank_database()
             return
 
@@ -482,7 +491,8 @@ class PartsDatabase:
             futil.log_error( f'update_folder() -- Error loading "{path}".')
             return False
         
-        if g_update_queue.empty() and dfRec.areChildrenUpdated and dfRec.areFilesUpdated:
+        # if self.is_built() or (g_update_queue.empty() and dfRec.areChildrenUpdated and dfRec.areFilesUpdated):
+        if self.is_built():
             # Both the files and the folder have been updated
             # so add this folder to the job queue to check for
             # any changes since running Fusion but turn recursion off
@@ -514,7 +524,11 @@ class PartsDatabase:
         # Otherwise they won't show up in the list in the palette.
         for fdr in rec._childFolders:
             child: FolderRecord = rec._childFolders[fdr]
-            if len(child._files) == 0 and len(child._childFolders) == 0:
+            try:
+                db_parts = self.database['paths'][child.path]
+            except:
+                db_parts = 0
+            if len(child._files) == 0 and len(child._childFolders) == 0 and db_parts == 0:
                 self.add_folder_placeholder(child.path)
 
         # Remove the placeholder entry for this folders if
@@ -735,6 +749,7 @@ class DatabaseThread(threading.Thread):
                             g_parts_db.build_complete()
                             g_parts_db.save_json_file()
                             send_event_to_main_thread('status', 'Idle.' )
+                            send_event_to_main_thread('update', '' )
 
                 if not current_job:
                     if g_update_queue.empty():                        
