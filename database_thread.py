@@ -4,6 +4,7 @@ import threading
 import time
 import json
 import re
+from datetime import datetime, timedelta
 from queue import Queue
 from enum import Enum
 
@@ -35,6 +36,14 @@ def get_icon_filename( path:str, basename:str ):
     flat_path = flatten_path(path)
     folder = config.PARTS_DB_PATH
     return os.path.join(folder, 'icons', f'{flat_path}{safeName}.png')
+
+def delete_all_icons():
+    icon_path = os.path.join(config.PARTS_DB_PATH, 'icons')
+    for f in os.listdir(icon_path):
+        try:
+            os.remove(os.path.join(icon_path,f))
+        except:
+            pass
 
 def send_event_to_main_thread(action, data):
     # action is one of:
@@ -333,6 +342,8 @@ class PartsDatabaseFileIO:
 
 
 class PartsDatabase:
+    DATE_FORMAT = r'%d/%m/%y %H:%M:%S.%f'
+    EXPIRED_DATABASE = timedelta( 14 )  # Forteen days
     JSON_FILE = 'parts_db.json'
 
     def __init__(self, io: PartsDatabaseFileIO):
@@ -357,6 +368,17 @@ class PartsDatabase:
             self.blank_database()
             return
 
+        if not 'build_date' in self.database:
+            self.database['build_date'] = datetime.strftime(datetime(1900, 1, 1), PartsDatabase.DATE_FORMAT)
+
+        # Check if the database is too old.
+        build_date = datetime.strptime(self.database['build_date'], PartsDatabase.DATE_FORMAT)
+        if datetime.now() - build_date > PartsDatabase.EXPIRED_DATABASE:
+            futil.log(f'Expired database..  Build date = {build_date}')
+            delete_all_icons()
+            self.blank_database()
+            return
+
         if self.database['project']['name'] != self.io.project.name:
             # The parts db is for a different project!
             futil.log(f'JSON project and the settings project do not match!')
@@ -366,6 +388,7 @@ class PartsDatabase:
     def blank_database(self):
         self.database = {}
         self.database['built'] = False
+        self.database['build_date'] = datetime.strftime(datetime(1900, 1, 1), PartsDatabase.DATE_FORMAT)
         self.database['project'] = {'name': self.io.project.name, 'id': self.io.project.id }
         self.database['parts'] = {}
         self.database['paths'] = {}
@@ -374,6 +397,8 @@ class PartsDatabase:
         return self.database['built']
 
     def build_complete(self):
+        timestr = datetime.strftime(datetime.now(), PartsDatabase.DATE_FORMAT)
+        self.database['build_date'] = timestr
         self.database['built'] = True
 
     def add_part(self, id, path, name, version):
@@ -407,6 +432,27 @@ class PartsDatabase:
             futil.handle_error(f'remove_part() id = {id}')
         finally:
             self.mutex.release()
+
+    def remove_part_at_path(self, id, path):
+        # If a part gets moved from one folder to another
+        # then the partID is still in the database but
+        # the path should be different
+        try:
+            self.mutex.acquire()
+            part = self.database['parts'][id]
+            id_path = part['path']
+            self.database['paths'][path].remove(id)
+            if len(self.database['paths'][path]) == 0:
+                del self.database['paths'][path]
+
+            if id_path == path:
+                del self.database['parts'][id]
+
+        except:
+            futil.handle_error(f'remove_part() id = {id}')
+        finally:
+            self.mutex.release()
+
 
 
     def add_folder_placeholder(self, path):
@@ -445,7 +491,8 @@ class PartsDatabase:
             futil.log_error( f'update_folder() -- Error loading "{path}".')
             return False
         
-        if g_update_queue.empty() and dfRec.areChildrenUpdated and dfRec.areFilesUpdated:
+        # if self.is_built() or (g_update_queue.empty() and dfRec.areChildrenUpdated and dfRec.areFilesUpdated):
+        if self.is_built():
             # Both the files and the folder have been updated
             # so add this folder to the job queue to check for
             # any changes since running Fusion but turn recursion off
@@ -477,7 +524,11 @@ class PartsDatabase:
         # Otherwise they won't show up in the list in the palette.
         for fdr in rec._childFolders:
             child: FolderRecord = rec._childFolders[fdr]
-            if len(child._files) == 0 and len(child._childFolders) == 0:
+            try:
+                db_parts = self.database['paths'][child.path]
+            except:
+                db_parts = 0
+            if len(child._files) == 0 and len(child._childFolders) == 0 and db_parts == 0:
                 self.add_folder_placeholder(child.path)
 
         # Remove the placeholder entry for this folders if
@@ -509,7 +560,7 @@ class PartsDatabase:
             # Remove all the parts.  remove_part() will delete the path
             # entry when there are no more parts
             for fid in self.database['paths'][path]:
-                self.remove_part(fid)
+                self.remove_part_at_path(fid, path)
                 
         # Remove any parts that have been deleted from the project
         delete_ids = []
@@ -533,10 +584,17 @@ class PartsDatabase:
         if os.path.exists(db_filename):
             try:
                 with open(db_filename, 'r') as f:
-                    self.database = json.load(f)
+                    try:
+                        self.mutex.acquire()
+                        self.database = json.load(f)
+                    except:
+                        futil.handle_error( f'Could not read parts db JSON file {db_filename}...')
+                        return False
+                    finally:
+                        self.mutex.release()
                 return True
             except:
-                futil.log( f'Could not open parts db JSON file {db_filename} for reading...')
+                futil.handle_error( f'Could not open parts db JSON file {db_filename} for reading...')
         else:
             futil.log( f'Parts db JSON file {db_filename} does not exist...')
         return False
@@ -545,9 +603,12 @@ class PartsDatabase:
         db_filename = os.path.join( config.PARTS_DB_PATH, PartsDatabase.JSON_FILE )
         try:
             with open(db_filename, 'w') as f:
+                self.mutex.acquire()
                 json.dump(self.database, f, indent=2)
         except Exception:
             futil.handle_error(f"Could not write parts database file '{db_filename}'.")
+        finally:
+            self.mutex.release()
 
 
 def get_data_file( path, data_file_id ):
@@ -688,6 +749,7 @@ class DatabaseThread(threading.Thread):
                             g_parts_db.build_complete()
                             g_parts_db.save_json_file()
                             send_event_to_main_thread('status', 'Idle.' )
+                            send_event_to_main_thread('update', '' )
 
                 if not current_job:
                     if g_update_queue.empty():                        

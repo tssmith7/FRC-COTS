@@ -1,15 +1,17 @@
 import adsk.core
+import adsk.fusion
 import os
 from ...lib import fusionAddInUtils as futil
 from ... import config
+
 app = adsk.core.Application.get()
 ui = app.userInterface
 
 
 # TODO *** Specify the command identity information. ***
-CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_cmdDialog'
-CMD_NAME = 'Command Dialog Sample'
-CMD_Description = 'A Fusion Add-in Command with a dialog'
+CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_makeSpacer'
+CMD_NAME = 'FRC_COTS Make Spacer'
+CMD_Description = 'Make a COTS part into a Dynamic Spacer'
 
 # Specify that the command will be promoted to the panel.
 IS_PROMOTED = True
@@ -19,8 +21,12 @@ IS_PROMOTED = True
 # command it will be inserted beside. Not providing the command to position it
 # will insert it at the end.
 WORKSPACE_ID = 'FusionSolidEnvironment'
-PANEL_ID = 'SolidScriptsAddinsPanel'
-COMMAND_BESIDE_ID = 'ScriptsManagerCommand'
+TAB_ID = 'ToolsTab'
+TAB_NAME = 'Make Spacer'
+
+PANEL_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_makeSpacerPanel'
+PANEL_NAME = 'Make Spacer'
+COMMAND_BESIDE_ID = ''
 
 # Resource location for command icons, here we assume a sub folder in this directory named "resources".
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', '')
@@ -43,7 +49,14 @@ def start():
     workspace = ui.workspaces.itemById(WORKSPACE_ID)
 
     # Get the panel the button will be created in.
-    panel = workspace.toolbarPanels.itemById(PANEL_ID)
+    toolbar_tab = workspace.toolbarTabs.itemById(TAB_ID)
+    if toolbar_tab is None:
+        toolbar_tab = workspace.toolbarTabs.add(TAB_ID, TAB_NAME)
+
+    # Get target panel for the command and and create the panel if necessary.
+    panel = toolbar_tab.toolbarPanels.itemById(PANEL_ID)
+    if panel is None:
+        panel = toolbar_tab.toolbarPanels.add(PANEL_ID, PANEL_NAME, '', False)
 
     # Create the button command control in the UI after the specified existing command.
     control = panel.controls.addCommand(cmd_def, COMMAND_BESIDE_ID, False)
@@ -57,6 +70,7 @@ def stop():
     # Get the various UI elements for this command
     workspace = ui.workspaces.itemById(WORKSPACE_ID)
     panel = workspace.toolbarPanels.itemById(PANEL_ID)
+    toolbar_tab = workspace.toolbarTabs.itemById(TAB_ID)
     command_control = panel.controls.itemById(CMD_ID)
     command_definition = ui.commandDefinitions.itemById(CMD_ID)
 
@@ -67,6 +81,14 @@ def stop():
     # Delete the command definition
     if command_definition:
         command_definition.deleteMe()
+
+    # Delete the panel if it is empty
+    if panel.controls.count == 0:
+        panel.deleteMe()
+
+    # Delete the tab if it is empty
+    if toolbar_tab.toolbarPanels.count == 0:
+        toolbar_tab.deleteMe()
 
 
 # Function that is called when a user clicks the corresponding button in the UI.
@@ -80,13 +102,17 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 
     # TODO Define the dialog for your command by adding different inputs to the command.
 
-    # Create a simple text box input.
-    inputs.addTextBoxCommandInput('text_box', 'Some Text', 'Enter some text.', 1, False)
+    mesg = ('This command makes a Part into a Dynamic Spacer. '
+            'It does this by setting an invisible attribute in the file '
+            'that can be detected when the part is inserted into a design.')
 
-    # Create a value input field and set the default using 1 unit of the default length unit.
-    defaultLengthUnits = app.activeProduct.unitsManager.defaultLengthUnits
-    default_value = adsk.core.ValueInput.createByString('1')
-    inputs.addValueInput('value_input', 'Some Value', defaultLengthUnits, default_value)
+    # # Create a Text Box for information.
+    text = inputs.addTextBoxCommandInput( 'info', '', mesg, 6, True)
+    text.isFullWidth = True
+
+    design: adsk.fusion.Design = app.activeProduct
+    make_spacer = inputs.addBoolValueInput('make_spacer', 'Make Spacer', True)
+    make_spacer.value = is_design_spacer(design)
 
     # TODO Connect to the events that are needed by this command.
     futil.add_handler(args.command.execute, command_execute, local_handlers=local_handlers)
@@ -102,18 +128,36 @@ def command_execute(args: adsk.core.CommandEventArgs):
     # General logging for debug.
     futil.log(f'{CMD_NAME} Command Execute Event')
 
-    # TODO ******************************** Your code here ********************************
 
     # Get a reference to your command's inputs.
     inputs = args.command.commandInputs
-    text_box: adsk.core.TextBoxCommandInput = inputs.itemById('text_box')
-    value_input: adsk.core.ValueCommandInput = inputs.itemById('value_input')
+    # jointSel: adsk.core.SelectionCommandInput = inputs.itemById('jointing_position')
+    makeSpacer: adsk.core.BoolValueCommandInput = inputs.itemById('make_spacer')
 
-    # Do something interesting
-    text = text_box.text
-    expression = value_input.expression
-    msg = f'Your text: {text}<br>Your value: {expression}'
-    ui.messageBox(msg)
+    design: adsk.fusion.Design = app.activeProduct
+
+    # Delete any only joint attributes
+    oldAttribs = design.findAttributes('FRC_COTS', 'joint')
+    for oldAttrib in oldAttribs:
+        oldAttrib.deleteMe()
+
+    # if jointSel.selectionCount > 0:
+    #     joint = jointSel.selection(0).entity
+    #     if isinstance(joint, adsk.fusion.BRepEdge):
+    #         edge: adsk.fusion.BRepEdge = joint
+    #         edge.attributes.add( 'FRC_COTS', 'joint', '1' )
+    #     elif isinstance(joint, adsk.fusion.BRepFace):
+    #         face: adsk.fusion.BRepFace = joint
+    #         face.attributes.add( 'FRC_COTS', 'joint', '1' )
+    #     else:
+    #         futil.log(f'Unhandled selection type "{joint.classType()}"')
+
+    if makeSpacer.value:
+        design.attributes.add( 'FRC_COTS', 'spacer', '1' )
+    else:
+        attr = design.attributes.itemByName( 'FRC_COTS', 'spacer' )
+        if attr:
+            attr.deleteMe()
 
 
 # This event handler is called when the command needs to compute a new preview in the graphics window.
@@ -141,12 +185,12 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
 
     inputs = args.inputs
     
-    # Verify the validity of the input values. This controls if the OK button is enabled or not.
-    valueInput = inputs.itemById('value_input')
-    if valueInput.value >= 0:
-        args.areInputsValid = True
-    else:
-        args.areInputsValid = False
+    # # Verify the validity of the input values. This controls if the OK button is enabled or not.
+    # valueInput = inputs.itemById('value_input')
+    # if valueInput.value >= 0:
+    #     args.areInputsValid = True
+    # else:
+    #     args.areInputsValid = False
         
 
 # This event handler is called when the command terminates.
@@ -156,3 +200,21 @@ def command_destroy(args: adsk.core.CommandEventArgs):
 
     global local_handlers
     local_handlers = []
+
+def is_design_spacer(design: adsk.fusion.Design):
+    spacer_attr = design.attributes.itemByName('FRC_COTS', 'spacer')
+    if spacer_attr:
+        # This part is a spacer
+        return True
+    
+    return False
+
+def is_dataFile_spacer(dataFile: adsk.core.DataFile) -> bool:
+    doc = app.documents.open(dataFile, False)
+    design = doc.products.itemByProductType('DesignProductType')
+    isSpacer = False
+    if design:
+        isSpacer = is_design_spacer(design)
+    doc.close(False)
+
+    return isSpacer

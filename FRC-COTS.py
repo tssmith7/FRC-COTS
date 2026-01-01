@@ -3,8 +3,13 @@ import adsk.fusion
 import traceback
 import json
 import os
+from . import commands
 from . import config
 from . import database_thread
+
+from .commands.insertPart import entry as insertPart
+from .commands.insertSpacer import entry as insertSpacer
+from .commands.makeSpacer import entry as setJoint
 
 from .lib import fusionAddInUtils as futil
 
@@ -51,14 +56,6 @@ def _ensure_file_paths_exist():
 
     return True
 
-def _delete_all_icons():
-    icon_path = os.path.join(config.PARTS_DB_PATH, 'icons')
-    for f in os.listdir(icon_path):
-        try:
-            os.remove(os.path.join(icon_path,f))
-        except:
-            pass
-        
 def _favorites_path():
     """Path to the favorites JSON file next to this add-in."""
     folder = config.PARTS_DB_PATH
@@ -182,11 +179,11 @@ def insert_part_at_targets(design: adsk.fusion.Design, path, label, data_file_id
             joint_input.setAsRigidJointMotion()
 
             # Flip the default joint orientation (for example, 180 degrees about its primary axis)
-            try:
-                joint_input.isFlipped = True
-            except:
-                # If this property is not available, just ignore and proceed
-                pass
+            # try:
+            #     joint_input.isFlipped = True
+            # except:
+            #     # If this property is not available, just ignore and proceed
+            #     pass
 
             joints.add(joint_input)
 
@@ -353,23 +350,22 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
 
                 path, label, data_file_id, _ = cots_files[idx]
 
-                # Get current canvas selections as targets
-                sels = ui.activeSelections
-                targets = [sels.item(i).entity for i in range(sels.count)]
-                if not targets:
-                    ui.messageBox(
-                        'No geometry selected.\n\n'
-                        'Select one or more faces, edges, or joint origins in the canvas, '
-                        'then click the part in the FRC COTS palette.'
-                    )
-                    return
+                dataFile = database_thread.get_data_file( path, data_file_id )
+                isSpacer = setJoint.is_dataFile_spacer(dataFile)
 
-                design = adsk.fusion.Design.cast(app.activeProduct)
-                if not design:
-                    ui.messageBox('No active Fusion design.')
-                    return
+                if isSpacer:
+                    # This is a spacer
+                    insertCmd = ui.commandDefinitions.itemById(config.INSERT_SPACER_CMD_ID)
+                    insertSpacer.g_dataFile = dataFile
+                else:
+                    insertCmd = ui.commandDefinitions.itemById(config.INSERT_PART_CMD_ID)
+                    insertPart.g_dataFile = dataFile
 
-                insert_part_at_targets(design, path, label, data_file_id, targets, ui)
+                if insertCmd:
+                    insertCmd.execute()
+
+
+                # insert_part_at_targets(design, path, label, data_file_id, targets, ui)
                 return
 
             # User navigated to a new folder
@@ -489,12 +485,20 @@ def run(context):
             # Manully call the startup handler to start the database thread.
             onStartupCompleted.notify('')
 
+        commands.start()
+
     except:
         ui.messageBox('Add-in run failed:\n{}'.format(traceback.format_exc()))
 
 
 def stop(context):
     global g_dbThread
+    global handlers
+
+    # Release event handlers
+    handlers = []
+
+    commands.stop()
 
     try:
         cmd_id = 'FRC_InsertCOTS'
@@ -503,8 +507,6 @@ def stop(context):
         if g_dbThread:
             g_dbThread.stop()
             g_dbThread.join()
-
-        _delete_all_icons()
 
         # Remove the toolbar button
         solid_ws = ui.workspaces.itemById('FusionSolidEnvironment')
