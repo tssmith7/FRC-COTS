@@ -3,7 +3,7 @@ import adsk.fusion
 import os
 from ...lib import fusionAddInUtils as futil
 from ... import config
-from ..insertPart.entry import joint_part
+from ..insertPart.entry import joint_part, find_normal_centroid
 
 app = adsk.core.Application.get()
 ui = app.userInterface
@@ -16,7 +16,7 @@ CMD_Description = 'Insert a dynamic spacer'
 # Specify that the command will be promoted to the panel.
 IS_PROMOTED = False
 
-# TODO *** Define the location where the command button will be created. ***
+# Define the location where the command button will be created.
 # This is done by specifying the workspace, the tab, and the panel, and the 
 # command it will be inserted beside. Not providing the command to position it
 # will insert it at the end.
@@ -34,40 +34,22 @@ local_handlers = []
 # The datafile to be inserted.  Set in FRC_COTS.py - FRCHTMLHandler()
 g_dataFile = adsk.core.DataFile.cast(None)
 
+# The active component
+g_active_occ = adsk.fusion.Occurrence.cast(None)
+
 # Executed when add-in is run.
 def start():
     # Create a command Definition.
     cmd_def = ui.commandDefinitions.addButtonDefinition(
         config.INSERT_SPACER_CMD_ID, CMD_NAME, CMD_Description, ICON_FOLDER)
 
-    # Define an event handler for the command created event. It will be called when the button is clicked.
+    # Define an event handler for the command created event.
     futil.add_handler(cmd_def.commandCreated, command_created)
-
-    # ******** Add a button into the UI so the user can run the command. ********
-    # Get the target workspace the button will be created in.
-    # workspace = ui.workspaces.itemById(WORKSPACE_ID)
-
-    # # Get the panel the button will be created in.
-    # panel = workspace.toolbarPanels.itemById(PANEL_ID)
-
-    # # Create the button command control in the UI after the specified existing command.
-    # control = panel.controls.addCommand(cmd_def, COMMAND_BESIDE_ID, False)
-
-    # # Specify if the command is promoted to the main toolbar. 
-    # control.isPromoted = IS_PROMOTED
-
 
 # Executed when add-in is stopped.
 def stop():
-    # Get the various UI elements for this command
-    # workspace = ui.workspaces.itemById(WORKSPACE_ID)
-    # panel = workspace.toolbarPanels.itemById(PANEL_ID)
-    # command_control = panel.controls.itemById(config.INSERT_SPACER_CMD_ID)
+    # Get the cmddef for this command
     command_definition = ui.commandDefinitions.itemById(config.INSERT_SPACER_CMD_ID)
-
-    # # Delete the button command control
-    # if command_control:
-    #     command_control.deleteMe()
 
     # Delete the command definition
     if command_definition:
@@ -93,6 +75,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     sel = inputs.addSelectionInput('target_entity', 'Start', 'Select face or circle/arc')
     sel.addSelectionFilter('PlanarFaces')
     sel.addSelectionFilter('CircularEdges')
+    sel.addSelectionFilter('JointOrigins')
     sel.setSelectionLimits(1, 1)
 
     extentType = inputs.addDropDownCommandInput(
@@ -122,8 +105,9 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 
     flipInp = inputs.addBoolValueInput('force_flip', 'Flip', True, os.path.join(ICON_FOLDER, 'Flip'))
 
-    # TODO Connect to the events that are needed by this command.
-    futil.add_handler(args.command.execute, command_execute, local_handlers=local_handlers)
+    # Connect to the events that are needed by this command.
+    # futil.add_handler(args.command.execute, command_execute, local_handlers=local_handlers)
+    futil.add_handler(args.command.preSelect, command_preselect, local_handlers=local_handlers)
     futil.add_handler(args.command.inputChanged, command_input_changed, local_handlers=local_handlers)
     futil.add_handler(args.command.executePreview, command_preview, local_handlers=local_handlers)
     futil.add_handler(args.command.validateInputs, command_validate_input, local_handlers=local_handlers)
@@ -132,25 +116,47 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     global g_dataFile
     partFile.text = g_dataFile.name
 
+    global g_active_occ
+    design: adsk.fusion.Design = adsk.fusion.Design.cast(app.activeProduct)
+    active_comp = design.activeComponent
+    occList = design.rootComponent.allOccurrencesByComponent( active_comp )
+    if occList.count == 0:
+        return
+    g_active_occ = occList.item(0)
 
-# This event handler is called when the user clicks the OK button in the command dialog or 
-# is immediately called after the created event not command inputs were created for the dialog.
-def command_execute(args: adsk.core.CommandEventArgs):
-    # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Execute Event')
+    design.activateRootComponent()
 
-    # TODO ******************************** Your code here ********************************
+# Only allow selection of an extent entity with a parallel plane to the target entity
+def command_preselect(args: adsk.core.SelectionEventArgs):
+    inputs = args.firingEvent.sender.commandInputs
 
-    # Get a reference to your command's inputs.
-    inputs = args.command.commandInputs
-    target_entity: adsk.core.SelectionCommandInput = inputs.itemById('target_entity')
+    targetInp: adsk.core.SelectionCommandInput = inputs.itemById('target_entity')
+    extentInp: adsk.core.SelectionCommandInput = inputs.itemById('extent_selection')
 
+    if targetInp.selectionCount == 0 and extentInp.selectionCount == 0:
+        return
+    
+    if args.activeInput.id == extentInp.id:
+        # We are selecting the extent selection
+        already_selected = targetInp
+    elif args.activeInput.id == targetInp.id:
+        # We are selecting the target selection
+        already_selected = extentInp
+    else:
+        return
+    
+    target = already_selected.selection(0).entity
+    targetNorm, centroid = find_normal_centroid(target)
+    selNorm, centroid = find_normal_centroid(args.selection.entity)
 
-
+    if not targetNorm.isParallelTo(selNorm) :
+        # Do not allow selection of non-coplanar faces
+        args.isSelectable = False
 
 # This event handler is called when the command needs to compute a new preview in the graphics window.
 def command_preview(args: adsk.core.CommandEventArgs):
     global g_dataFile
+    global g_active_occ
 
      # General logging for debug.
     futil.log(f'{CMD_NAME} Command Preview Event')
@@ -170,6 +176,7 @@ def command_preview(args: adsk.core.CommandEventArgs):
 
     # Determine how long the spacer should be
     spacer_length = 2.0 * 2.54
+    extrude_flip = False
     if extentType.selectedItem.name == 'Distance':
         spacer_length = distanceInp.value + startOffset.value
     else:
@@ -177,16 +184,21 @@ def command_preview(args: adsk.core.CommandEventArgs):
         selection_distance = app.measureManager.measureMinimumDistance(target_entity, extent)
         spacer_length = selection_distance.value + startOffset.value + endOffset.value
 
-    design: adsk.fusion.Design = adsk.fusion.Design.cast(app.activeProduct)
+        extrude_flip = determine_extrude_flip(target_entity, extent)
 
-    root_comp = design.rootComponent
+    design: adsk.fusion.Design = adsk.fusion.Design.cast(app.activeProduct)
 
     start_timeline_pos = design.timeline.markerPosition
 
     target = target_selInput.selection(0).entity
 
+    if g_active_occ:
+        active_comp = g_active_occ.component
+    else:
+        active_comp = design.rootComponent
+
     transform = adsk.core.Matrix3D.create()
-    occs = root_comp.occurrences
+    occs = active_comp.occurrences
     new_occ = occs.addByInsert(
         g_dataFile,
         transform,
@@ -201,20 +213,23 @@ def command_preview(args: adsk.core.CommandEventArgs):
 
     top_face = find_offset_face(new_occ, True)
     offset_face = find_offset_face(new_occ)
-    model_length = app.measureManager.measureMinimumDistance(top_face, offset_face)
+    tempBR = adsk.fusion.TemporaryBRepManager.get()
+    body1 = tempBR.copy(top_face)
+    body2 = tempBR.copy(offset_face)
+    model_length = app.measureManager.measureMinimumDistance(body1, body2)
 
-    joint_part(root_comp, target, new_occ, force_flip)
+    joint_part(active_comp, target, new_occ, force_flip ^ extrude_flip)
 
     bottom_dist = spacer_length - model_length.value - startOffset.value
     if abs(bottom_dist) > 0.0001:
         bottom_distInp = adsk.core.ValueInput.createByReal(bottom_dist)
-        offset_input = root_comp.features.offsetFacesFeatures.createInput( [offset_face], bottom_distInp)
-        root_comp.features.offsetFacesFeatures.add(offset_input)
+        offset_input = active_comp.features.offsetFacesFeatures.createInput( [offset_face], bottom_distInp)
+        active_comp.features.offsetFacesFeatures.add(offset_input)
 
     if abs(startOffset.value) > 0.0001:
         top_dist = adsk.core.ValueInput.createByReal(startOffset.value)
-        offset_input = root_comp.features.offsetFacesFeatures.createInput( [top_face], top_dist)
-        root_comp.features.offsetFacesFeatures.add(offset_input)
+        offset_input = active_comp.features.offsetFacesFeatures.createInput( [top_face], top_dist)
+        active_comp.features.offsetFacesFeatures.add(offset_input)
 
     new_occ.component.name = g_dataFile.name + f' x {spacer_length/2.54:.3f}in'
 
@@ -290,25 +305,37 @@ def command_destroy(args: adsk.core.CommandEventArgs):
     # General logging for debug.
     futil.log(f'{CMD_NAME} Command Destroy Event')
 
+    global g_active_occ
+    if g_active_occ:
+        g_active_occ.activate()
+    g_active_occ = None
+
     global local_handlers
     local_handlers = []
 
-def find_offset_face( occ: adsk.fusion.Occurrence, topFace: bool = False):
+def find_offset_face( occ: adsk.fusion.Occurrence, jointFace: bool = False):
     if occ.bRepBodies.count > 1:
         futil.log(f'Cannot handle spacers with more than one body!')
         return None
     
     # Default to top face pointing in the positive Z-direction
     plus_Z = adsk.core.Vector3D.create(0,0,1)
+    joint_origin = None
     if occ.component.jointOrigins.count > 0:
         joint_origin = occ.component.jointOrigins.item(0)
         # Use the joint origin primary direction
         plus_Z = joint_origin.primaryAxisVector
+        if joint_origin.isFlipped:
+            plus_Z.scaleBy(-1.0)
     
     dotProd = -1.0
-    if topFace:
+    if jointFace:
         dotProd = 1.0
-    
+
+    # if joint_origin:
+    #     if joint_origin.isFlipped:
+    #         dotProd = dotProd * -1.0
+
     body = occ.bRepBodies.item(0)
     for face in body.faces:
         ok, normal = face.evaluator.getNormalAtPoint(face.centroid)
@@ -319,3 +346,16 @@ def find_offset_face( occ: adsk.fusion.Occurrence, topFace: bool = False):
                 return face
             
     return None
+
+def determine_extrude_flip( start: adsk.core.Base, end: adsk.core.Base) -> bool:
+
+    start_normal, start_centroid = find_normal_centroid(start)
+    end_normal, end_centroid = find_normal_centroid(end)
+
+    start_to_end_normal = start_centroid.vectorTo(end_centroid)
+    start_to_end_normal.normalize()
+
+    stoend_z_dot = start_normal.dotProduct(start_to_end_normal)
+
+    return stoend_z_dot < 0
+
