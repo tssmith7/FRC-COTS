@@ -30,8 +30,9 @@ ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resource
 # they are not released and garbage collected.
 local_handlers = []
 
-# The datafile to be inserted.  Set in FRC_COTS.py - FRCHTMLHandler()
+# The datafile and icon file name to be inserted.  Set in FRC_COTS.py - FRCHTMLHandler()
 g_dataFile = adsk.core.DataFile.cast(None)
+g_iconName = ''
 
 # The active component
 g_active_occ = adsk.fusion.Occurrence.cast(None)
@@ -70,7 +71,11 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     # TODO Define the dialog for your command by adding different inputs to the command.
 
     # Create a simple text box input.
-    partFile = inputs.addTextBoxCommandInput('insert_part', 'Part:', '', 2, True)
+    partFile = inputs.addTextBoxCommandInput('insert_part', '', '', 2, True)
+    global g_iconName
+    inputs.addImageCommandInput( 'thumbnail', '', g_iconName)
+
+    inputs.addSeparatorCommandInput('part_sep')
 
     # Create a selection input for the joint locations.
     sel = inputs.addSelectionInput('target_entity', 'Joints:', 'Select face or circle')
@@ -86,6 +91,9 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     # angleInp = inputs.addAngleValueCommandInput( 'joint_angle', 'Angle', zero)
     # angleInp.isVisible = False
     # angleInp.isEnabled = False
+
+    linkInp = inputs.addBoolValueInput( 'link_part', 'Link Part', True)
+    linkInp.value = config.DEFAULT_TO_LINKED_PARTS
 
     inputs.addBoolValueInput( 'force_flip', 'Flip', True, os.path.join(ICON_FOLDER, 'Flip'))
 
@@ -132,6 +140,9 @@ def command_preview(args: adsk.core.CommandEventArgs):
     futil.log(f'{CMD_NAME} Command Preview Event')
     inputs = args.command.commandInputs
 
+    linkInp: adsk.core.BoolValueCommandInput = inputs.itemById('link_part')
+    link_part = linkInp.value
+
     target_selInput: adsk.core.SelectionCommandInput = inputs.itemById('target_entity')
     # angleInp: adsk.core.AngleValueCommandInput = inputs.itemById('joint_angle')
     flipInp: adsk.core.BoolValueCommandInput = inputs.itemById('force_flip')
@@ -145,44 +156,26 @@ def command_preview(args: adsk.core.CommandEventArgs):
         active_comp = g_active_occ.component
     else:
         active_comp = design.rootComponent
-
+    
     root_occs = design.rootComponent.occurrences
 
     transform = adsk.core.Matrix3D.create()
     part_occ = adsk.fusion.Occurrence.cast(None)
     for i in range( target_selInput.selectionCount):
         target = target_selInput.selection(i).entity
-        # if part_occ:
-        #     part_occ = occs.addExistingComponent( part_occ.component, transform )
-        #     joint_part(active_comp, target, part_occ, force_flip)
-        # else:
-        if 1:
+        if link_part:
             # A bug makes so you can only insert a linked component from another project
             # into the root component.  So we have to move it if a sub component
             # is the active component.
             part_occ = root_occs.addByInsert( g_dataFile, transform, True )
-            # if active_comp.id != design.rootComponent.id:
             if g_active_occ:
-                # futil.log(f'Active comp: name = {active_comp.name}, comp_id = {active_comp.id}')
-                # active_occ = None
-                # for occ in  root_occs.asArray():
-                #     futil.log(f'Root occurance name = {occ.name}, comp_name={occ.component.name}, comp_id = {occ.component.id}')
-                # occList = design.rootComponent.allOccurrencesByComponent( active_comp )
-                # if occList.count == 0:
-                #     return
-                # active_occ = occList.item(0)
-                # temp_occ = None
-                # if occs.count == 0:
-                #     temp_occ = occs.addNewComponent(transform)
-                #     # copied_occ = occs.addExistingComponent( part_occ.component, transform )
-                #     # part_occ.deleteMe()
-                #     # part_occ = copied_occ
                 part_occ = part_occ.moveToComponent( g_active_occ )
-                # if temp_occ:
-                #     pass
-                    # temp_occ.deleteMe()
-            # angleVal = adsk.core.ValueInput.createByString(angleInp.expression)
-            joint_part(active_comp, target, part_occ, force_flip)
+
+        else:
+            # Do not link component
+            part_occ = active_comp.occurrences.addByInsert( g_dataFile, transform, False )
+
+        joint_part(active_comp, target, part_occ, force_flip)
 
     args.isValidResult = True
 

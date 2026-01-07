@@ -31,8 +31,9 @@ ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resource
 # they are not released and garbage collected.
 local_handlers = []
 
-# The datafile to be inserted.  Set in FRC_COTS.py - FRCHTMLHandler()
+# The datafile and icon file name to be inserted.  Set in FRC_COTS.py - FRCHTMLHandler()
 g_dataFile = adsk.core.DataFile.cast(None)
+g_iconName = ''
 
 # The active component
 g_active_occ = adsk.fusion.Occurrence.cast(None)
@@ -68,8 +69,11 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     # TODO Define the dialog for your command by adding different inputs to the command.
 
     # Create a simple read only text box.
-    partFile = inputs.addTextBoxCommandInput('insert_part', '', '', 1, True)
-    partFile.isFullWidth = True
+    partFile = inputs.addTextBoxCommandInput('insert_part', '', '', 2, True)
+    global g_iconName
+    inputs.addImageCommandInput( 'thumbnail', '', g_iconName)
+
+    inputs.addSeparatorCommandInput('part_sep')
 
     # Create a selection input for the joint location.
     sel = inputs.addSelectionInput('target_entity', 'Start', 'Select face or circle/arc')

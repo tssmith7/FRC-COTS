@@ -348,7 +348,7 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     ui.messageBox('Invalid part index from HTML.')
                     return
 
-                path, label, data_file_id, _ = cots_files[idx]
+                path, label, data_file_id, icon_name = cots_files[idx]
 
                 dataFile = database_thread.get_data_file( path, data_file_id )
                 isSpacer = setJoint.is_dataFile_spacer(dataFile)
@@ -357,9 +357,11 @@ class FRCHTMLHandler(adsk.core.HTMLEventHandler):
                     # This is a spacer
                     insertCmd = ui.commandDefinitions.itemById(config.INSERT_SPACER_CMD_ID)
                     insertSpacer.g_dataFile = dataFile
+                    insertSpacer.g_iconName = icon_name
                 else:
                     insertCmd = ui.commandDefinitions.itemById(config.INSERT_PART_CMD_ID)
                     insertPart.g_dataFile = dataFile
+                    insertPart.g_iconName = icon_name
 
                 if insertCmd:
                     insertCmd.execute()
